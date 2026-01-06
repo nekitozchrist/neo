@@ -83,7 +83,7 @@ def create_dialogues():
         return
     
     # 3. Определяем путь для сохранения диалогов
-    dialogues_dir = Path(output_dir).parent / "data"
+    dialogues_dir = Path(output_dir) / "data"
     dialogues_dir.mkdir(exist_ok=True)
     
     dialogues_path = dialogues_dir / "dialogues.json"
@@ -92,6 +92,36 @@ def create_dialogues():
     print(f"  Количество диалогов: {num_dialogues:,}")
     print(f"  Сохранение в: {dialogues_path}")
     print(f"  Папка результатов: {output_dir}")
+    
+    print_step("🔄 Запускаю создание диалогов...")
+
+    # Запускаем процесс
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        universal_newlines=True,
+        bufsize=1,
+        encoding='utf-8'
+        )
+    
+    # Читаем вывод ПОСТРОЧНО
+    print("\n" + "="*60)
+    print("📝 ВЫВОД dialog_loader.py:")
+    print("="*60)
+
+    for line in process.stdout:
+        line = line.rstrip()  # Убираем лишние пробелы
+        if line:  # Выводим только непустые строки
+            print(f"   {line}")
+
+    print("="*60)
+
+    # Ждём завершения
+    process.wait()
+
+    # Пауза чтобы прочитать
+    input("\n👆 Выше вывод скрипта. Нажмите Enter чтобы продолжить...")
     
     confirm = input(f"\n{Fore.YELLOW}Создать диалоги? (y/n): {Style.RESET_ALL}").lower()
     if confirm != 'y':
@@ -109,10 +139,7 @@ def create_dialogues():
             Path(__file__).parent.parent / "dialog_loader.py",
             Path("dialog_loader.py")
         ]
-        print_info(f"Команда: {' '.join(cmd)}")
-        print_info(f"Рабочая директория: {os.getcwd()}")
-        print_info(f"Путь к dialog_loader.py: {dialog_loader_path}")
-        print_info(f"Существует: {dialog_loader_path.exists()}")
+        
         
         dialog_loader_path = None
         for path in dialog_loader_paths:
@@ -131,6 +158,11 @@ def create_dialogues():
             str(num_dialogues),
             "--output", output_dir  # ← ПЕРЕДАЕМ ПУТЬ!
         ]
+        
+        print_info(f"Команда: {' '.join(cmd)}")
+        print_info(f"Рабочая директория: {os.getcwd()}")
+        print_info(f"Путь к dialog_loader.py: {dialog_loader_path}")
+        print_info(f"Существует: {dialog_loader_path.exists()}")
         
         print_info(f"Запуск: {' '.join(cmd)}")
         
@@ -187,6 +219,7 @@ def create_dialogues():
         print_error(f"Ошибка запуска: {e}")
         import traceback
         traceback.print_exc()
+        
     
     input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
     
