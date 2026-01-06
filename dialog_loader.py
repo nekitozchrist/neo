@@ -3,15 +3,73 @@
 50-100 примеров с эмпатией
 """
 
+import argparse
 import json
 from pathlib import Path
 import random
 import re
 from datetime import datetime
 
-print("="*80)
-print("📝 СОЗДАНИЕ КАЧЕСТВЕННЫХ ПСИХОЛОГИЧЕСКИХ ДАННЫХ (УЛУЧШЕННАЯ ВЕРСИЯ)")
-print("="*80)
+def get_dialogues_path(output_dir: str = None) -> Path:
+    """Находит или создает путь к диалогам рядом с output_dir"""
+    # 1. Если указан output_dir, ищем рядом
+    if output_dir:
+        base_path = Path(output_dir).parent  # Поднимаемся на уровень выше
+        possible_paths = [
+            base_path / "dialogues.json",
+            base_path / "data" / "dialogues.json",
+            base_path / "quality_psych_dialogues_enhanced.json",
+            base_path / "processed_epitome" / "quality_psych_dialogues_enhanced.json",
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                return path
+    
+    # 2. Ищем в типичных местах проекта
+    project_paths = [
+        Path(__file__).parent.parent / "quality_psych_dialogues_enhanced.json",
+        Path(__file__).parent / "quality_psych_dialogues_enhanced.json",
+        Path("C:/Files/processed_epitome/quality_psych_dialogues_enhanced.json"),
+        Path("D:/Files/processed_epitome/quality_psych_dialogues_enhanced.json"),
+    ]
+    
+    for path in project_paths:
+        if path.exists():
+            return path
+    
+    # 3. Если не нашли, возвращаем дефолтный путь для создания
+    default_path = Path(__file__).parent / "dialogues.json"
+    return default_path
+
+# В main() заменяем хардкод пути:
+def main():
+   parser = argparse.ArgumentParser(description='Создание психологических диалогов')
+   parser.add_argument('num_dialogues', type=int, nargs='?', default=10000,
+                      help='Количество диалогов (по умолчанию: 10000)')
+   parser.add_argument('--output', type=str, 
+                      help='Папка для сохранения (диалоги будут в output/data/dialogues.json)')
+   
+   args = parser.parse_args()
+   
+   # Определяем путь сохранения
+   if args.output:
+       output_dir = Path(args.output)
+   else:
+       # Дефолтный путь рядом с лаунчером
+       output_dir = Path(__file__).parent / "experiments" / "default"
+   
+   # Создаем папку data внутри
+   data_dir = output_dir / "data"
+   data_dir.mkdir(parents=True, exist_ok=True)
+   
+   output_file = data_dir / "dialogues.json"
+   
+   print("=" * 60)
+   print(f"🎭 СОЗДАНИЕ {args.num_dialogues} ПСИХОЛОГИЧЕСКИХ ДИАЛОГОВ")
+   print("=" * 60)
+   print(f"📍 Сохранение в: {output_file}")
+   print("=" * 60)
 
 # ================= УЛУЧШЕННЫЕ ДАННЫЕ =================
 
