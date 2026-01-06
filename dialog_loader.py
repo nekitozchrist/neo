@@ -14,7 +14,7 @@ def get_dialogues_path(output_dir: str = None) -> Path:
     """Находит или создает путь к диалогам рядом с output_dir"""
     # 1. Если указан output_dir, ищем рядом
     if output_dir:
-        base_path = Path(output_dir).parent  # Поднимаемся на уровень выше
+        base_path = Path(output_dir)  # Указываем путь к конечной папке
         possible_paths = [
             base_path / "dialogues.json",
             base_path / "data" / "dialogues.json",
@@ -70,6 +70,8 @@ def main():
    print("=" * 60)
    print(f"📍 Сохранение в: {output_file}")
    print("=" * 60)
+   
+   return output_file
 
 # ================= УЛУЧШЕННЫЕ ДАННЫЕ =================
 
@@ -331,7 +333,10 @@ for i in range(1, dia + 1):
 
 # ================= СОХРАНЕНИЕ =================
 
-output_path = Path("C:/Files/processed_epitome/quality_psych_dialogues_enhanced.json")
+if __name__ == "__main__":
+    main()
+    
+output_path = str(main())
 output_path.parent.mkdir(parents=True, exist_ok=True)
 
 with open(output_path, 'w', encoding='utf-8') as f:
