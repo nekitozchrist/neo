@@ -11,15 +11,13 @@ import time
 from pathlib import Path
 import subprocess
 from datetime import datetime
-from typing import List, Tuple, Optional
-from pathlib import Path
+import colorama
 
 # Добавляем путь для импорта из core
 sys.path.insert(0, str(Path(__file__).parent / "core"))
 
 # Colorama для цветного вывода
 try:
-    import colorama
     from colorama import Fore, Back, Style, init
     init(autoreset=True)
     COLORS_ENABLED = True
@@ -42,6 +40,185 @@ except ImportError as e:
 # ============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================================================
+
+def create_dialogues():
+    """Создание диалогов для обучения"""
+    print_header()
+    print(f"{Fore.CYAN}{Style.BRIGHT}🎭 СОЗДАНИЕ ПСИХОЛОГИЧЕСКИХ ДИАЛОГОВ{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
+    
+    # 1. Сначала выбираем куда сохранять
+    output_dir = select_output_directory()
+    if output_dir is None:
+        print_info("Создание отменено")
+        return
+    
+    # 2. Спрашиваем количество диалогов
+    print(f"\n{Fore.YELLOW}Сколько диалогов создать?{Style.RESET_ALL}")
+    print("1. 1,000 (тестовый режим)")
+    print("2. 10,000 (стандартный набор)")
+    print("3. 50,000 (большой набор)")
+    print("4. Ввести своё число")
+    
+    choice = input(f"\n{Fore.YELLOW}Выберите вариант (1-4): {Style.RESET_ALL}").strip()
+    
+    if choice == "1":
+        num_dialogues = 1000
+    elif choice == "2":
+        num_dialogues = 10000
+    elif choice == "3":
+        num_dialogues = 50000
+    elif choice == "4":
+        while True:
+            try:
+                num_dialogues = int(input(f"{Fore.YELLOW}Введите число диалогов: {Style.RESET_ALL}"))
+                if num_dialogues > 0:
+                    break
+                else:
+                    print_error("Число должно быть положительным")
+            except ValueError:
+                print_error("Введите число")
+    else:
+        print_error("Неверный выбор")
+        return
+    
+    # 3. Определяем путь для сохранения диалогов
+    dialogues_dir = Path(output_dir).parent / "data"
+    dialogues_dir.mkdir(exist_ok=True)
+    
+    dialogues_path = dialogues_dir / "dialogues.json"
+    
+    print(f"\n{Fore.CYAN}📊 ПАРАМЕТРЫ СОЗДАНИЯ:{Style.RESET_ALL}")
+    print(f"  Количество диалогов: {num_dialogues:,}")
+    print(f"  Сохранение в: {dialogues_path}")
+    print(f"  Папка результатов: {output_dir}")
+    
+    confirm = input(f"\n{Fore.YELLOW}Создать диалоги? (y/n): {Style.RESET_ALL}").lower()
+    if confirm != 'y':
+        print_info("Создание отменено")
+        return
+    
+    # 4. Запускаем dialog_loader.py
+    print(f"\n{Fore.GREEN}{Style.BRIGHT}🎭 СОЗДАНИЕ ДИАЛОГОВ...{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
+    
+    try:
+        # Ищем dialog_loader.py
+        dialog_loader_paths = [
+            Path(__file__).parent / "dialog_loader.py",
+            Path(__file__).parent.parent / "dialog_loader.py",
+            Path("dialog_loader.py")
+        ]
+        print_info(f"Команда: {' '.join(cmd)}")
+        print_info(f"Рабочая директория: {os.getcwd()}")
+        print_info(f"Путь к dialog_loader.py: {dialog_loader_path}")
+        print_info(f"Существует: {dialog_loader_path.exists()}")
+        
+        dialog_loader_path = None
+        for path in dialog_loader_paths:
+            if path.exists():
+                dialog_loader_path = path
+                break
+        
+        if not dialog_loader_path:
+            print_error("❌ dialog_loader.py не найден!")
+            return
+        
+        # Формируем команду
+        cmd = [
+            sys.executable,
+            str(dialog_loader_path),
+            str(num_dialogues),
+            "--output", output_dir  # ← ПЕРЕДАЕМ ПУТЬ!
+        ]
+        
+        print_info(f"Запуск: {' '.join(cmd)}")
+        
+        # Запускаем
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            bufsize=1,
+            encoding='utf-8'
+        )
+        
+        # Вывод в реальном времени
+        for line in process.stdout:
+            print(line, end='')
+        
+        # Ожидание завершения
+        process.wait()
+        
+        if process.returncode == 0:
+            print_success(f"\n✅ Создано {num_dialogues:,} диалогов!")
+            
+            # Обновляем base.json чтобы указывал на созданные диалоги
+            dialogues_path = Path(output_dir) / "data" / "dialogues.json"
+            if dialogues_path.exists():
+                update_config_with_dialogues_path(str(dialogues_path))
+            
+            # Показываем статистику
+            if dialogues_path.exists():
+                import json
+                with open(dialogues_path, 'r', encoding='utf-8') as f:
+                    dialogues = json.load(f)
+                
+                print_info(f"📊 Статистика:")
+                print(f"  • Файл: {dialogues_path.name}")
+                print(f"  • Размер: {dialogues_path.stat().st_size / 1024 / 1024:.1f} MB")
+                print(f"  • Диалогов: {len(dialogues)}")
+                
+                # Пример диалога
+                if dialogues:
+                    first_dialogue = dialogues[0]
+                    if isinstance(first_dialogue, dict) and 'text' in first_dialogue:
+                        preview = first_dialogue['text'][:100] + "..." if len(first_dialogue['text']) > 100 else first_dialogue['text']
+                        print(f"  • Пример: {preview}")
+        else:
+            print_error(f"\n❌ Ошибка создания диалогов (код: {process.returncode})")
+            
+    except FileNotFoundError:
+        print_error("Python не найден!")
+    except KeyboardInterrupt:
+        print_warning("\nСоздание прервано пользователем")
+    except Exception as e:
+        print_error(f"Ошибка запуска: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
+    
+def update_config_with_dialogues_path(dialogues_path: str):
+    """Обновляет base.json с новым путем к диалогам"""
+    base_config_path = Path("./configs/base.json")
+    
+    if not base_config_path.exists():
+        return
+    
+    try:
+        with open(base_config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        # Обновляем путь
+        if 'data' not in config:
+            config['data'] = {}
+        
+        old_path = config['data'].get('path', '')
+        config['data']['path'] = str(dialogues_path)
+        
+        # Сохраняем
+        with open(base_config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+        
+        if old_path != str(dialogues_path):
+            print_success(f"✅ Конфиг обновлен: {dialogues_path}")
+        else:
+            print_info("ℹ️  Конфиг уже указывал на этот файл")
+            
+    except Exception as e:
+        print_warning(f"Не удалось обновить конфиг: {e}")
 
 def clear_screen():
     """Очистка экрана"""
@@ -74,590 +251,11 @@ def print_step(msg):
     """Шаг процесса"""
     print(f"{Fore.BLUE}➡️  {msg}{Style.RESET_ALL}")
 
-def progress_bar(iteration, total, prefix='', suffix='', length=30, fill='█'):
-    """Отображение прогресс-бара"""
-    percent = ("{0:.1f}").format(100 * (iteration / float(total)))
-    filled_length = int(length * iteration // total)
-    bar = fill * filled_length + '-' * (length - filled_length)
-    
-    # Цвет в зависимости от прогресса
-    if percent < 33:
-        color = Fore.RED
-    elif percent < 66:
-        color = Fore.YELLOW
-    else:
-        color = Fore.GREEN
-    
-    print(f'\r{prefix} |{color}{bar}{Style.RESET_ALL}| {percent}% {suffix}', end='\r')
-    if iteration == total:
-        print()
-
-def get_input(prompt, default=None, input_type=str):
-    """Безопасный ввод с дефолтным значением"""
-    if default is not None:
-        prompt = f"{prompt} [{default}]: "
-    else:
-        prompt = f"{prompt}: "
-    
-    while True:
-        try:
-            value = input(prompt).strip()
-            if not value and default is not None:
-                return default
-            if not value:
-                raise ValueError("Значение не может быть пустым")
-            return input_type(value)
-        except ValueError as e:
-            print_error(f"Неверный ввод: {e}")
-
 # ============================================================================
-# ФУНКЦИИ УПРАВЛЕНИЯ КОНФИГУРАЦИЕЙ
+# УПРАВЛЕНИЕ ДИРЕКТОРИЯМИ
 # ============================================================================
 
-def view_configuration():
-    """Просмотр текущей конфигурации"""
-    print_header()
-    print(f"{Fore.CYAN}{Style.BRIGHT}📋 ТЕКУЩАЯ КОНФИГУРАЦИЯ")
-    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
-    
-    try:
-        # Загружаем текущий конфиг
-        config = CONFIG_MANAGER.load_full_config()
-        params = CONFIG_MANAGER.get_training_params()
-        
-        # Основные параметры
-        print(f"{Fore.YELLOW}🎯 ОСНОВНЫЕ ПАРАМЕТРЫ:{Style.RESET_ALL}")
-        print(f"  Модель: {params.get('model_name', 'N/A')}")
-        print(f"  Данные: {Path(params.get('data_path', '')).name if params.get('data_path') else 'N/A'}")
-        print(f"  Batch size: {params.get('batch_size', 'N/A')}")
-        print(f"  Эпохи: {params.get('epochs', 'N/A')}")
-        print(f"  Learning rate: {params.get('learning_rate', 'N/A')}")
-        print(f"  Max length: {params.get('max_length', 'N/A')}")
-        
-        # Пути
-        print(f"\n{Fore.YELLOW}📁 ПУТИ:{Style.RESET_ALL}")
-        paths = config.get('paths', {})
-        for key, value in paths.items():
-            print(f"  {key}: {value}")
-        
-        # Модель
-        print(f"\n{Fore.YELLOW}🤖 МОДЕЛЬ:{Style.RESET_ALL}")
-        model = config.get('model', {})
-        for key, value in model.items():
-            print(f"  {key}: {value}")
-        
-        # Дополнительно
-        print(f"\n{Fore.YELLOW}⚙️  ДОПОЛНИТЕЛЬНО:{Style.RESET_ALL}")
-        print(f"  Device: {config.get('system', {}).get('device', 'N/A')}")
-        print(f"  Seed: {config.get('system', {}).get('seed', 'N/A')}")
-        print(f"  Precision: {config.get('system', {}).get('precision', 'N/A')}")
-        
-    except Exception as e:
-        print_error(f"Ошибка загрузки конфигурации: {e}")
-    
-    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
-
-def change_training_params():
-    """Изменение параметров обучения"""
-    print_header()
-    print(f"{Fore.CYAN}{Style.BRIGHT}✏️  ИЗМЕНЕНИЕ ПАРАМЕТРОВ ОБУЧЕНИЯ")
-    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
-    
-    try:
-        config = CONFIG_MANAGER.load_full_config()
-        training_config = config.get('training', {})
-        
-        print_info("Текущие значения:")
-        for key, value in training_config.items():
-            if key in ['batch_size', 'epochs', 'learning_rate', 'max_length']:
-                print(f"  {key}: {value}")
-        
-        print(f"\n{Fore.YELLOW}Введите новые значения (оставьте пустым для сохранения текущего):{Style.RESET_ALL}")
-        
-        updates = {'training': {}}
-        
-        # Batch size
-        current_bs = training_config.get('batch_size', 3)
-        new_bs = get_input(f"Batch size (1-32)", default=current_bs, input_type=int)
-        if 1 <= new_bs <= 32:
-            updates['training']['batch_size'] = new_bs
-        else:
-            print_warning(f"Batch size {new_bs} вне диапазона, оставляем {current_bs}")
-            updates['training']['batch_size'] = current_bs
-        
-        # Learning rate
-        current_lr = training_config.get('learning_rate', 0.0002)
-        new_lr = get_input(f"Learning rate (1e-5 до 1e-3)", default=current_lr, input_type=float)
-        if 1e-5 <= new_lr <= 1e-3:
-            updates['training']['learning_rate'] = new_lr
-        else:
-            print_warning(f"Learning rate {new_lr} вне диапазона, оставляем {current_lr}")
-            updates['training']['learning_rate'] = current_lr
-        
-        # Epochs
-        current_epochs = training_config.get('epochs', 3)
-        new_epochs = get_input(f"Эпохи (1-10)", default=current_epochs, input_type=int)
-        if 1 <= new_epochs <= 10:
-            updates['training']['epochs'] = new_epochs
-        else:
-            print_warning(f"Эпохи {new_epochs} вне диапазона, оставляем {current_epochs}")
-            updates['training']['epochs'] = current_epochs
-        
-        # Max length
-        current_ml = config.get('tokenization', {}).get('max_length', 729)
-        new_ml = get_input(f"Макс. длина (128-1024)", default=current_ml, input_type=int)
-        if 128 <= new_ml <= 1024:
-            updates['tokenization'] = {'max_length': new_ml}
-        else:
-            print_warning(f"Макс. длина {new_ml} вне диапазона, оставляем {current_ml}")
-            updates['tokenization'] = {'max_length': current_ml}
-        
-        # Применяем изменения
-        CONFIG_MANAGER.update_custom_config(updates)
-        print_success("Параметры успешно обновлены!")
-        
-        # Показываем новые значения
-        print(f"\n{Fore.YELLOW}НОВЫЕ ЗНАЧЕНИЯ:{Style.RESET_ALL}")
-        new_config = CONFIG_MANAGER.load_full_config()
-        new_training = new_config.get('training', {})
-        print(f"  Batch size: {new_training.get('batch_size')}")
-        print(f"  Learning rate: {new_training.get('learning_rate')}")
-        print(f"  Эпохи: {new_training.get('epochs')}")
-        print(f"  Макс. длина: {new_config.get('tokenization', {}).get('max_length')}")
-        
-    except Exception as e:
-        print_error(f"Ошибка изменения параметров: {e}")
-    
-    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
-
-def select_preset():
-    """Выбор пресета"""
-    print_header()
-    print(f"{Fore.CYAN}{Style.BRIGHT}🎯 ВЫБОР ПРЕСЕТА ОБУЧЕНИЯ")
-    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
-    
-    try:
-        # Получаем список пресетов
-        presets_dir = Path("./configs/presets")
-        if not presets_dir.exists():
-            print_warning("Папка с пресетами не найдена")
-            input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
-            return
-        
-        presets = sorted([p.stem for p in presets_dir.glob("*.json")])
-        
-        if not presets:
-            print_warning("Пресеты не найдены")
-            input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
-            return
-        
-        print_info("Доступные пресеты:")
-        for i, preset in enumerate(presets, 1):
-            # Загружаем описание пресета
-            preset_path = presets_dir / f"{preset}.json"
-            try:
-                with open(preset_path, 'r', encoding='utf-8') as f:
-                    preset_data = json.load(f)
-                description = preset_data.get('meta', {}).get('description', 'Без описания')
-                print(f"{i}. {preset} - {description}")
-            except:
-                print(f"{i}. {preset}")
-        
-        print(f"\n{Fore.YELLOW}0. Вернуться в меню")
-        
-        while True:
-            try:
-                choice = int(input(f"\nВыберите пресет (1-{len(presets)}): "))
-                if choice == 0:
-                    return
-                if 1 <= choice <= len(presets):
-                    selected = presets[choice-1]
-                    
-                    # Загружаем пресет для предпросмотра
-                    preset_config = CONFIG_MANAGER.load_preset(selected)
-                    
-                    print(f"\n{Fore.YELLOW}Параметры пресета '{selected}':{Style.RESET_ALL}")
-                    if 'training' in preset_config:
-                        for key, value in preset_config['training'].items():
-                            print(f"  {key}: {value}")
-                    
-                    confirm = input(f"\n{Fore.YELLOW}Применить пресет '{selected}'? (y/n): {Style.RESET_ALL}").lower()
-                    if confirm == 'y':
-                        # Обновляем кастомный конфиг
-                        CONFIG_MANAGER.update_custom_config(preset_config)
-                        print_success(f"Пресет '{selected}' применён!")
-                        
-                        # Показываем применённые параметры
-                        new_config = CONFIG_MANAGER.load_full_config()
-                        training = new_config.get('training', {})
-                        print(f"\n{Fore.CYAN}Текущие параметры:{Style.RESET_ALL}")
-                        print(f"  Batch size: {training.get('batch_size')}")
-                        print(f"  Learning rate: {training.get('learning_rate')}")
-                        print(f"  Эпохи: {training.get('epochs')}")
-                        
-                        time.sleep(2)
-                    break
-                else:
-                    print_error(f"Пожалуйста, введите число от 1 до {len(presets)}")
-            except ValueError:
-                print_error("Неверный ввод. Введите число.")
-    
-    except Exception as e:
-        print_error(f"Ошибка выбора пресета: {e}")
-    
-    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
-
-def create_preset():
-    """Создание нового пресета"""
-    print_header()
-    print(f"{Fore.CYAN}{Style.BRIGHT}🆕 СОЗДАНИЕ НОВОГО ПРЕСЕТА")
-    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
-    
-    try:
-        preset_name = input(f"{Fore.YELLOW}Название пресета (латинскими буквами, без пробелов): {Style.RESET_ALL}").strip()
-        
-        if not preset_name:
-            print_error("Название не может быть пустым")
-            return
-        
-        # Проверяем, не существует ли уже
-        preset_path = Path("./configs/presets") / f"{preset_name}.json"
-        if preset_path.exists():
-            overwrite = input(f"Пресет '{preset_name}' уже существует. Перезаписать? (y/n): ").lower()
-            if overwrite != 'y':
-                print_info("Создание отменено")
-                return
-        
-        print_info("\nВведите параметры пресета:")
-        print_info("(оставьте пустым для значений по умолчанию из текущей конфигурации)\n")
-        
-        # Получаем текущие значения
-        current_config = CONFIG_MANAGER.load_full_config()
-        current_training = current_config.get('training', {})
-        
-        preset_config = {
-            "meta": {
-                "description": f"Пресет '{preset_name}'",
-                "created_by": "launcher",
-                "created_at": datetime.now().isoformat()
-            },
-            "training": {}
-        }
-        
-        # Собираем параметры
-        params = [
-            ("batch_size", "Размер батча", int, 1, 32, current_training.get('batch_size', 3)),
-            ("learning_rate", "Скорость обучения (например 0.0002)", float, 1e-5, 1e-3, current_training.get('learning_rate', 0.0002)),
-            ("epochs", "Количество эпох", int, 1, 10, current_training.get('epochs', 3)),
-            ("warmup_ratio", "Доля warmup (0.0-1.0)", float, 0.0, 1.0, current_training.get('warmup_ratio', 0.9)),
-        ]
-        
-        for param_key, param_desc, param_type, min_val, max_val, default in params:
-            while True:
-                try:
-                    prompt = f"{param_desc} [{min_val}-{max_val}] (по умолчанию: {default}): "
-                    value_str = input(prompt).strip()
-                    
-                    if not value_str:
-                        value = default
-                    else:
-                        value = param_type(value_str)
-                    
-                    if min_val <= value <= max_val:
-                        preset_config["training"][param_key] = value
-                        break
-                    else:
-                        print_error(f"Значение должно быть в диапазоне [{min_val}, {max_val}]")
-                except ValueError:
-                    print_error("Неверный формат")
-        
-        # Добавляем описание
-        description = input(f"\nОписание пресета (опционально): ").strip()
-        if description:
-            preset_config["meta"]["description"] = description
-        
-        # Сохраняем пресет
-        CONFIG_MANAGER.save_preset(preset_name, preset_config)
-        print_success(f"Пресет '{preset_name}' успешно создан!")
-        
-        # Предлагаем применить
-        apply = input(f"\nПрименить созданный пресет? (y/n): ").lower()
-        if apply == 'y':
-            CONFIG_MANAGER.update_custom_config(preset_config)
-            print_success("Пресет применён!")
-        
-    except Exception as e:
-        print_error(f"Ошибка создания пресета: {e}")
-    
-    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
-
-def manage_configuration():
-    """Главное меню управления конфигурацией"""
-    while True:
-        print_header()
-        print(f"{Fore.CYAN}{Style.BRIGHT}⚙️  УПРАВЛЕНИЕ КОНФИГУРАЦИЕЙ")
-        print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
-        
-        print("1. 📋 Просмотреть текущую конфигурацию")
-        print("2. ✏️  Изменить параметры обучения")
-        print("3. 🎯 Выбрать пресет")
-        print("4. 🆕 Создать новый пресет")
-        print("5. ↩️  Вернуться в главное меню")
-        
-        choice = input(f"\n{Fore.YELLOW}Выберите действие (1-5): {Style.RESET_ALL}").strip()
-        
-        if choice == "1":
-            view_configuration()
-        elif choice == "2":
-            change_training_params()
-        elif choice == "3":
-            select_preset()
-        elif choice == "4":
-            create_preset()
-        elif choice == "5":
-            break
-        else:
-            print_error("Неверный выбор. Пожалуйста, выберите 1-5.")
-
-# ============================================================================
-# ФУНКЦИИ ОБУЧЕНИЯ И МОНИТОРИНГА
-# ============================================================================
-
-def start_training():
-    """Запуск процесса обучения"""
-    print_header()
-    print(f"{Fore.CYAN}{Style.Bright}🚀 ЗАПУСК ОБУЧЕНИЯ{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
-    
-    # 1. Выбор директории
-    output_dir = select_output_directory()
-    if output_dir is None:  # Явная проверка на None
-        print_info("Запуск отменен")
-        time.sleep(1)
-        return
-    
-    # 2. Проверка доступности GPU
-    print_step("Проверка оборудования...")
-    try:
-        if torch.cuda.is_available():
-            gpu_name = torch.cuda.get_device_name(0)
-            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
-            print_success(f"GPU: {gpu_name} ({gpu_memory:.1f} GB)")
-        else:
-            print_warning("⚠️  CUDA не доступна, используется CPU")
-    except:
-        pass
-
-    # 2. Загружаем конфигурацию
-    config = CONFIG_MANAGER.load_full_config()
-    
-    # 3. Обновляем конфиг с выбранным путем
-    config['paths']['base'] = output_dir
-
-    try:
-        config = CONFIG_MANAGER.load_full_config()
-        params = CONFIG_MANAGER.get_training_params()
-        
-        # Обновляем путь в конфиге
-        if 'paths' not in config:
-            config['paths'] = {}
-        config['paths']['base'] = output_dir
-        config['paths']['logs'] = str(Path(output_dir) / 'logs')
-        config['paths']['checkpoints'] = str(Path(output_dir) / 'checkpoints')
-        
-        print_success(f"Конфигурация загружена")
-        print_info(f"Директория результатов: {output_dir}")
-        
-    except Exception as e:
-        print_error(f"Ошибка конфигурации: {e}")
-        return
-    
-    # 4. Подтверждение запуска
-    print(f"\n{Fore.YELLOW}📋 ПАРАМЕТРЫ ЗАПУСКА:{Style.RESET_ALL}")
-    print(f"  Модель: {params.get('model_name', 'N/A')}")
-    print(f"  Batch size: {params.get('batch_size', 'N/A')}")
-    print(f"  Эпохи: {params.get('epochs', 'N/A')}")
-    print(f"  Learning rate: {params.get('learning_rate', 'N/A'):.2e}")
-    print(f"  Сохранение в: {output_dir}")
-    
-    print(f"\n{Fore.RED}{Style.BRIGHT}⚠️  ВНИМАНИЕ: Обучение может занять несколько часов!{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
-    
-    confirm = input(f"\n{Fore.YELLOW}Запустить обучение? (y/n): {Style.RESET_ALL}").lower()
-    
-    if confirm != 'y':
-        print_info("Запуск отменен")
-        time.sleep(1)
-        return
-        
-        # Подготовка к запуску
-        print_step("Подготовка к запуску...")
-        
-        # Создаем папки если нужно
-        Path("./logs").mkdir(exist_ok=True)
-        Path("./checkpoints").mkdir(exist_ok=True)
-        
-        # Формируем команду для запуска workout.py
-        cmd = [
-            sys.executable, "workout.py",
-            "--config", "./configs/custom.json" if Path("./configs/custom.json").exists() else "./configs/base.json"
-        ]
-        
-        # Добавляем пресет если выбран
-        current_preset = None
-        if Path("./configs/custom.json").exists():
-            with open("./configs/custom.json", 'r') as f:
-                custom = json.load(f)
-                if custom.get('_preset'):
-                    current_preset = custom['_preset']
-        
-        if current_preset:
-            cmd.extend(["--preset", current_preset])
-        
-        print(f"\n{Fore.CYAN}Команда запуска:{Style.RESET_ALL}")
-        print(f"  {' '.join(cmd)}")
-        
-        # 5. Запуск workout.py
-    print(f"\n{Fore.GREEN}{Style.BRIGHT}▶️  ЗАПУСК ОБУЧЕНИЯ...{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
-    
-    try:
-        # Формируем команду
-        cmd = [
-            sys.executable, "workout.py",
-            "--output_dir", output_dir
-        ]
-        
-        # Добавляем пресет если выбран
-        current_config = CONFIG_MANAGER.config
-        if current_config.get('_preset'):
-            cmd.extend(["--preset", current_config['_preset']])
-        
-        print_info(f"Команда: {' '.join(cmd)}")
-        
-        # Запускаем
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            bufsize=1,
-            encoding='utf-8'
-        )
-        
-        # Вывод в реальном времени
-        for line in process.stdout:
-            print(line, end='')
-        
-        # Ожидание завершения
-        process.wait()
-        
-        if process.returncode == 0:
-            print_success("\n✅ Обучение успешно завершено!")
-            print_info(f"Результаты сохранены в: {output_dir}")
-        else:
-            print_error(f"\n❌ Обучение завершилось с ошибкой (код: {process.returncode})")
-            
-    except FileNotFoundError:
-        print_error("Файл workout.py не найден!")
-    except KeyboardInterrupt:
-        print_warning("\nОбучение прервано пользователем")
-    except Exception as e:
-        print_error(f"Ошибка запуска: {e}")
-    
-    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
-
-def check_logs():
-    """Просмотр логов"""
-    print_header()
-    print(f"{Fore.CYAN}{Style.BRIGHT}📊 ПРОСМОТР ЛОГОВ")
-    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
-    
-    logs_dir = Path("./logs")
-    
-    if not logs_dir.exists():
-        print_error("Папка логов не найдена")
-        input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
-        return
-    
-    # Ищем лог файлы
-    log_files = list(logs_dir.glob("*.log")) + list(logs_dir.glob("*.csv"))
-    
-    if not log_files:
-        print_info("Лог файлы не найдены")
-    else:
-        print_info(f"Найдено {len(log_files)} лог файлов:")
-        for i, log_file in enumerate(sorted(log_files, key=lambda x: x.stat().st_mtime, reverse=True)[:10], 1):
-            mtime = datetime.fromtimestamp(log_file.stat().st_mtime)
-            size_kb = log_file.stat().st_size // 1024
-            print(f"{i}. {log_file.name} ({size_kb} KB, {mtime.strftime('%Y-%m-%d %H:%M')})")
-    
-    print(f"\n{Fore.YELLOW}Опции:{Style.RESET_ALL}")
-    print("1. Просмотреть последний лог")
-    print("2. Очистить логи")
-    print("3. Вернуться в меню")
-    
-    choice = input(f"\n{Fore.YELLOW}Выберите действие (1-3): {Style.RESET_ALL}").strip()
-    
-    if choice == "1" and log_files:
-        latest_log = sorted(log_files, key=lambda x: x.stat().st_mtime, reverse=True)[0]
-        try:
-            with open(latest_log, 'r', encoding='utf-8') as f:
-                content = f.readlines()[-100:]  # Последние 100 строк
-            print(f"\n{Fore.CYAN}Последние строки из {latest_log.name}:{Style.RESET_ALL}")
-            print("-"*60)
-            for line in content:
-                print(line.rstrip())
-        except Exception as e:
-            print_error(f"Ошибка чтения лога: {e}")
-    elif choice == "2":
-        confirm = input(f"\n{Fore.RED}Удалить все логи? (y/n): {Style.RESET_ALL}").lower()
-        if confirm == 'y':
-            for log_file in log_files:
-                try:
-                    log_file.unlink()
-                except:
-                    pass
-            print_success("Логи очищены")
-    
-    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
-
-def test_model():
-    """Тестирование модели"""
-    print_header()
-    print(f"{Fore.CYAN}{Style.Bright}🧪 ТЕСТИРОВАНИЕ МОДЕЛИ")
-    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
-    
-    print_info("Функция тестирования в разработке...")
-    print("\nДоступные опции:")
-    print("1. Загрузить чекпоинт")
-    print("2. Протестировать на валидационных данных")
-    print("3. Интерактивный диалог")
-    
-    choice = input(f"\n{Fore.YELLOW}Выберите действие (1-3): {Style.RESET_ALL}").strip()
-    
-    if choice == "1":
-        checkpoints_dir = Path("./checkpoints")
-        if checkpoints_dir.exists():
-            checkpoints = list(checkpoints_dir.glob("*"))
-            if checkpoints:
-                print_info(f"Найдено {len(checkpoints)} чекпоинтов:")
-                for i, cp in enumerate(sorted(checkpoints, reverse=True)[:5], 1):
-                    print(f"{i}. {cp.name}")
-            else:
-                print_warning("Чекпоинты не найдены")
-        else:
-            print_error("Папка чекпоинтов не найдена")
-    elif choice == "2":
-        print_info("Тестирование на валидационных данных...")
-        # TODO: Реализовать тестирование
-    elif choice == "3":
-        print_info("Интерактивный диалог...")
-        # TODO: Реализовать интерактивный режим
-    
-    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
-
-def get_directory_history() -> List[Tuple[str, str]]:
+def get_directory_history() -> list:
     """Получает историю директорий"""
     history_file = Path("./configs/directory_history.json")
     
@@ -713,7 +311,60 @@ def save_to_history(path: str):
     except Exception as e:
         print_warning(f"Не удалось сохранить историю: {e}")
 
-def create_new_directory_interactive() -> Optional[str]:
+def select_output_directory():
+    """Интеллектуальный выбор директории для результатов"""
+    print_header()
+    print(f"{Fore.CYAN}{Style.BRIGHT}📁 КУДА СОХРАНИТЬ РЕЗУЛЬТАТЫ?{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
+    
+    # 1. Проверяем историю
+    history = get_directory_history()
+    
+    if history:
+        print(f"{Fore.YELLOW}📚 ИСТОРИЯ ВЫБОРА:{Style.RESET_ALL}")
+        for i, (name, path) in enumerate(history, 1):
+            # Проверяем существование
+            exists = "✅" if Path(path).exists() else "❌"
+            print(f"{i}. {exists} {name}")
+    
+    print(f"\n{Fore.YELLOW}⚡ БЫСТРЫЕ ВАРИАНТЫ:{Style.RESET_ALL}")
+    print("n. 📁 Новая директория (ввести путь)")
+    
+    if history:
+        print("0. ↩️  Отмена")
+    
+    print(f"\n{Fore.CYAN}{'-'*60}{Style.RESET_ALL}")
+    
+    # Выбор пользователя
+    while True:
+        choice = input(f"\n{Fore.YELLOW}Выберите вариант (1-{len(history)}, n, или 0): {Style.RESET_ALL}").strip().lower()
+        
+        if choice == '0' and history:
+            return None  # Отмена
+        elif choice == 'n':
+            return create_new_directory_interactive()
+        elif choice.isdigit() and history:
+            idx = int(choice) - 1
+            if 0 <= idx < len(history):
+                selected_path = history[idx][1]
+                if Path(selected_path).exists():
+                    print_success(f"Выбрано: {selected_path}")
+                    save_to_history(selected_path)
+                    return selected_path
+                else:
+                    print_warning(f"Директория не существует: {selected_path}")
+                    recreate = input(f"Создать её заново? (y/n): ").lower()
+                    if recreate == 'y':
+                        Path(selected_path).mkdir(parents=True, exist_ok=True)
+                        print_success(f"Директория создана: {selected_path}")
+                        save_to_history(selected_path)
+                        return selected_path
+        else:
+            print_error("Неверный выбор. Попробуйте снова.")
+    
+    return None
+
+def create_new_directory_interactive():
     """Интерактивное создание новой директории"""
     print(f"\n{Fore.CYAN}🆕 СОЗДАНИЕ НОВОЙ ДИРЕКТОРИИ{Style.RESET_ALL}")
     print(f"{Fore.CYAN}{'-'*40}{Style.RESET_ALL}")
@@ -771,154 +422,591 @@ def create_new_directory_interactive() -> Optional[str]:
         print_error(f"❌ Ошибка создания директории: {e}")
         return None
 
-def select_output_directory() -> Optional[str]:
-    """Интеллектуальный выбор директории для результатов"""
+def open_presets_folder():
+    """Открывает папку с пресетами в проводнике"""
+    import platform
+    import subprocess
+    
+    # Ищем папку с пресетами
+    presets_dirs = [
+        Path(__file__).parent.parent / "configs" / "presets",  # ../configs/presets
+        Path(__file__).parent / "configs" / "presets",         # ./configs/presets
+        Path("./configs/presets")                              # configs/presets
+    ]
+    
+    presets_dir = None
+    for dir_path in presets_dirs:
+        if dir_path.exists():
+            presets_dir = dir_path
+            break
+    
+    if not presets_dir:
+        # Создаем папку если её нет
+        presets_dir = Path("./configs/presets")
+        presets_dir.mkdir(parents=True, exist_ok=True)
+        print_info(f"Создана папка для пресетов: {presets_dir}")
+    
+    # Открываем в проводнике
+    try:
+        if platform.system() == "Windows":
+            os.startfile(str(presets_dir))
+        elif platform.system() == "Darwin":  # macOS
+            subprocess.run(["open", str(presets_dir)])
+        else:  # Linux
+            subprocess.run(["xdg-open", str(presets_dir)])
+        
+        print_success(f"📂 Открыта папка с пресетами: {presets_dir}")
+        print_info("\nСоздайте JSON файлы с именами:")
+        print("  • fast.json - для быстрого обучения")
+        print("  • quality.json - для качественного обучения")
+        print("  • debug.json - для отладки")
+        print("\nФормат файла пресета:")
+        print('''
+{
+  "meta": {
+    "description": "Описание пресета"
+  },
+  "training": {
+    "batch_size": 8,
+    "learning_rate": 0.0005,
+    "epochs": 2
+  }
+}''')
+        
+    except Exception as e:
+        print_error(f"Не удалось открыть папку: {e}")
+    
+    input(f"\n{Fore.CYAN}Нажмите Enter чтобы продолжить...{Style.RESET_ALL}")
+
+# ============================================================================
+# ФУНКЦИИ ОБУЧЕНИЯ И МОНИТОРИНГА
+# ============================================================================
+
+def start_training():
+    """Запуск процесса обучения"""
     print_header()
-    print(f"{Fore.CYAN}{Style.BRIGHT}📁 КУДА СОХРАНИТЬ РЕЗУЛЬТАТЫ?{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{Style.BRIGHT}🚀 ЗАПУСК ОБУЧЕНИЯ{Style.RESET_ALL}")
     print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
     
-    # 1. Проверяем историю
+    # 1. Выбор директории
+    output_dir = select_output_directory()
+    if output_dir is None:  # Явная проверка на None
+        print_info("Запуск отменен")
+        time.sleep(1)
+        return
+    
+    # 2. Показываем пресеты (ИСПРАВЛЕНО!)
+    print_step("Доступные пресеты обучения:")
+    
+    # Ищем пресеты относительно ПРОЕКТА, а не лаунчера
+    project_root = Path(__file__).parent.parent  # Поднимаемся на уровень выше trener/
+    presets_dir = project_root / "configs" / "presets"
+    
+    # Если не нашли там, пробуем рядом с лаунчером
+    if not presets_dir.exists():
+        presets_dir = Path(__file__).parent / "configs" / "presets"
+    
+    presets = []
+    if presets_dir.exists():
+        presets = sorted([p.stem for p in presets_dir.glob("*.json")])
+    
+    if presets:
+        for i, preset in enumerate(presets, 1):
+            print(f"  {i}. {preset}")
+        print(f"  Enter - использовать базовую конфигурацию")
+
+    # 3. Выбор пресета
+    selected_preset = None
+    if presets:
+        preset_choice = input(f"\n{Fore.YELLOW}Выберите пресет (1-{len(presets)} или Enter): {Style.RESET_ALL}").strip()
+        if preset_choice.isdigit():
+            idx = int(preset_choice) - 1
+            if 0 <= idx < len(presets):
+                selected_preset = presets[idx]
+                
+                # Загружаем пресет для показа параметров
+                try:
+                    preset_path = presets_dir / f"{selected_preset}.json"
+                    with open(preset_path, 'r') as f:
+                        preset_data = json.load(f)
+                    
+                    print_success(f"Выбран пресет: {selected_preset}")
+                    if 'training' in preset_data:
+                        print_info("Параметры пресета:")
+                        for key, value in preset_data['training'].items():
+                            print(f"  • {key}: {value}")
+                except Exception as e:
+                    print_warning(f"Не удалось загрузить пресет: {e}")
+    
+    # 4. Загрузка конфигурации с пресетом
+    try:
+        config = CONFIG_MANAGER.load_full_config(preset=selected_preset)
+        params = CONFIG_MANAGER.get_training_params()
+        
+        # Обновляем путь в конфиге
+        if 'paths' not in config:
+            config['paths'] = {}
+        config['paths']['base'] = output_dir
+        config['paths']['logs'] = str(Path(output_dir) / 'logs')
+        config['paths']['checkpoints'] = str(Path(output_dir) / 'checkpoints')
+        
+        print_success(f"Конфигурация загружена")
+        print_info(f"Директория результатов: {output_dir}")
+        
+        # Сохраняем конфиг для тренировки
+        config_path = Path(output_dir) / "training_config.json"
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+        print_info(f"Конфиг сохранен: {config_path}")
+        
+    except Exception as e:
+        print_error(f"Ошибка конфигурации: {e}")
+        return
+    
+    # 5. Автоматический поиск диалогов
+    print_step("Поиск данных для обучения...")
+    data_path = params.get('data_path', '')
+    
+    # Функция поиска диалогов
+    def find_dialogues_file():
+        """Ищет файл с диалогами в типичных местах"""
+        search_paths = [
+            Path(output_dir) / "data" / "dialogues.json",
+            Path(output_dir).parent / "data" / "dialogues.json",
+            Path(data_path) if data_path else None,
+            Path(__file__).parent.parent / "dialogues.json",
+            Path(__file__).parent / "dialogues.json",
+            Path("C:/Files/processed_epitome/quality_psych_dialogues_enhanced.json"),
+            Path("D:/Files/processed_epitome/quality_psych_dialogues_enhanced.json"),
+        ]
+        
+        for path in search_paths:
+            if path and path.exists():
+                return path
+        return None
+    
+    dialogues_file = find_dialogues_file()
+    
+    if not dialogues_file:
+        print_error("❌ Файл с диалогами не найден!")
+        print_info("\nСначала создайте диалоги через меню 'Создать диалоги'")
+        print("Или поместите файл в одну из папок:")
+        print(f"  • {Path(output_dir).parent / 'data' / 'dialogues.json'}")
+        print(f"  • {Path(output_dir).parent / 'dialogues.json'}")
+        print(f"  • {Path(__file__).parent / 'dialogues.json'}")
+        
+        create_now = input(f"\n{Fore.YELLOW}Создать диалоги сейчас? (y/n): {Style.RESET_ALL}").lower()
+        if create_now == 'y':
+            create_dialogues()
+            # Пробуем снова найти
+            dialogues_file = find_dialogues_file()
+            if not dialogues_file:
+                print_error("❌ Диалоги не созданы. Запуск отменен.")
+                return
+        else:
+            print_info("Запуск отменен")
+            return
+    
+    # Обновляем конфиг с найденным путем
+    config['data']['path'] = str(dialogues_file)
+    params['data_path'] = str(dialogues_file)
+    
+    print_success(f"✅ Данные найдены: {dialogues_file.name}")
+    print_info(f"  Размер: {dialogues_file.stat().st_size / 1024 / 1024:.1f} MB")
+    print_info(f"  Путь: {dialogues_file}")
+    
+    # 6. Подтверждение запуска
+    print(f"\n{Fore.YELLOW}📋 ПАРАМЕТРЫ ЗАПУСКА:{Style.RESET_ALL}")
+    print(f"  Модель: {params.get('model_name', 'N/A')}")
+    print(f"  Данные: {Path(params.get('data_path', '')).name}")
+    print(f"  Batch size: {params.get('batch_size', 'N/A')}")
+    print(f"  Эпохи: {params.get('epochs', 'N/A')}")
+    print(f"  Learning rate: {params.get('learning_rate', 'N/A'):.2e}")
+    print(f"  Сохранение в: {output_dir}")
+    
+    if selected_preset:
+        print(f"  Пресет: {selected_preset}")
+    
+    print(f"\n{Fore.RED}{Style.BRIGHT}⚠️  ВНИМАНИЕ: Обучение может занять несколько часов!{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
+    
+    confirm = input(f"\n{Fore.YELLOW}Запустить обучение? (y/n): {Style.RESET_ALL}").lower()
+    
+    if confirm != 'y':
+        print_info("Запуск отменен")
+        time.sleep(1)
+        return
+    
+    # 7. Запуск workout.py
+    print(f"\n{Fore.GREEN}{Style.BRIGHT}▶️  ЗАПУСК ОБУЧЕНИЯ...{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
+    
+    try:
+        # Находим workout.py относительно лаунчера
+        workout_path = Path(__file__).parent / "workout.py"
+        if not workout_path.exists():
+            workout_path = Path("workout.py")  # Попробуем в текущей директории
+        
+        # Формируем команду
+        cmd = [
+            sys.executable, 
+            str(workout_path),
+            "--output_dir", output_dir,
+            "--config", str(config_path)
+        ]
+        
+        if selected_preset:
+            cmd.extend(["--preset", selected_preset])
+        
+        print_info(f"Команда: {' '.join(cmd[:3])} ...")  # Не показываем весь путь
+        
+        # Запускаем
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            bufsize=1,
+            encoding='utf-8'
+        )
+        
+        # Вывод в реальном времени
+        for line in process.stdout:
+            print(line, end='')
+        
+        # Ожидание завершения
+        process.wait()
+        
+        if process.returncode == 0:
+            print_success("\n✅ Обучение успешно завершено!")
+            print_info(f"Результаты сохранены в: {output_dir}")
+            
+            # Показываем что создано
+            result_path = Path(output_dir)
+            if result_path.exists():
+                print(f"\n{Fore.CYAN}📁 СОДЕРЖИМОЕ ДИРЕКТОРИИ:{Style.RESET_ALL}")
+                for item in result_path.iterdir():
+                    if item.is_dir():
+                        file_count = len(list(item.glob("*")))
+                        print(f"  📁 {item.name}/ ({file_count} файлов)")
+                    else:
+                        size_kb = item.stat().st_size / 1024
+                        print(f"  📄 {item.name} ({size_kb:.1f} KB)")
+        else:
+            print_error(f"\n❌ Обучение завершилось с ошибкой (код: {process.returncode})")
+            
+    except FileNotFoundError:
+        print_error(f"Файл workout.py не найден! Искали: {workout_path}")
+    except KeyboardInterrupt:
+        print_warning("\nОбучение прервано пользователем")
+    except Exception as e:
+        print_error(f"Ошибка запуска: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
+
+def edit_base_config():
+    """Редактирование базового конфига"""
+    base_config_path = Path("./configs/base.json")
+    
+    if not base_config_path.exists():
+        print_error("Базовый конфиг не найден!")
+        return
+    
+    # Показываем текущий конфиг
+    try:
+        with open(base_config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        print(f"\n{Fore.CYAN}📝 РЕДАКТИРОВАНИЕ BASE.JSON{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'-'*40}{Style.RESET_ALL}")
+        
+        # Особенно важно - путь к данным!
+        print(f"\n{Fore.YELLOW}⚠️  ВАЖНО: Проверьте путь к данным!{Style.RESET_ALL}")
+        
+        current_data_path = config.get('data', {}).get('path', '')
+        print(f"\nТекущий путь к данным: {current_data_path}")
+        
+        if current_data_path and Path(current_data_path).exists():
+            print_success(f"✅ Файл данных найден ({Path(current_data_path).stat().st_size / 1024 / 1024:.1f} MB)")
+        else:
+            print_error(f"❌ Файл данных НЕ НАЙДЕН!")
+        
+        print(f"\n{Fore.YELLOW}Варианты:{Style.RESET_ALL}")
+        print("1. Изменить путь к данным")
+        print("2. Открыть конфиг в редакторе")
+        print("3. Назад")
+        
+        choice = input(f"\n{Fore.YELLOW}Выберите действие (1-3): {Style.RESET_ALL}").strip()
+        
+        if choice == "1":
+            new_path = input(f"{Fore.YELLOW}Новый путь к данным: {Style.RESET_ALL}").strip()
+            if new_path:
+                # Обновляем конфиг
+                if 'data' not in config:
+                    config['data'] = {}
+                config['data']['path'] = new_path
+                
+                # Сохраняем
+                with open(base_config_path, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=2, ensure_ascii=False)
+                
+                print_success(f"✅ Путь обновлен: {new_path}")
+                
+                # Проверяем новый путь
+                if Path(new_path).exists():
+                    print_success(f"✅ Новый файл найден!")
+                else:
+                    print_warning(f"⚠️  Файл пока не существует")
+        
+        elif choice == "2":
+            # Открываем в редакторе
+            import platform
+            import subprocess
+            
+            try:
+                if platform.system() == "Windows":
+                    os.startfile(str(base_config_path))
+                elif platform.system() == "Darwin":
+                    subprocess.run(["open", str(base_config_path)])
+                else:
+                    subprocess.run(["xdg-open", str(base_config_path)])
+                
+                print_success(f"✅ Конфиг открыт в редакторе")
+                print_info("\nСтруктура конфига:")
+                print('''{
+  "data": {
+    "path": "ПУТЬ_К_ВАШИМ_ДАННЫМ.json",  ← ВАЖНО!
+    "train_split": 0.85
+  },
+  "training": {
+    "batch_size": 3,
+    "epochs": 3,
+    "learning_rate": 0.0002
+  }
+  // ... остальные параметры ...
+}''')
+                
+            except Exception as e:
+                print_error(f"Не удалось открыть файл: {e}")
+    
+    except Exception as e:
+        print_error(f"Ошибка чтения конфига: {e}")
+    
+    input(f"\n{Fore.CYAN}Нажмите Enter чтобы продолжить...{Style.RESET_ALL}")
+
+def manage_configuration():
+    """Управление конфигурацией (упрощенное)"""
+    print_header()
+    print(f"{Fore.CYAN}{Style.BRIGHT}⚙️  УПРАВЛЕНИЕ КОНФИГУРАЦИЕЙ{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
+    
+    print("1. 📋 Просмотреть текущую конфигурацию")
+    print("2. ✏️  Изменить параметры обучения")
+    print("3. 🎯 Выбрать/создать пресет")
+    print("4. ↩️  Вернуться в главное меню")
+    
+    choice = input(f"\n{Fore.YELLOW}Выберите действие (1-4): {Style.RESET_ALL}").strip()
+    
+    if choice == "1":
+        view_configuration()
+    elif choice == "2":
+        edit_base_config()
+    elif choice == "3":
+        open_presets_folder()
+    elif choice == "4":
+        return
+    else:
+        print_error("Неверный выбор")
+
+def view_configuration():
+    """Просмотр конфигурации"""
+    try:
+        config = CONFIG_MANAGER.load_full_config()
+        params = CONFIG_MANAGER.get_training_params()
+        
+        print(f"\n{Fore.CYAN}📋 ТЕКУЩАЯ КОНФИГУРАЦИЯ{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'-'*40}{Style.RESET_ALL}")
+        
+        print(f"\n{Fore.YELLOW}🎯 ОСНОВНЫЕ ПАРАМЕТРЫ:{Style.RESET_ALL}")
+        print(f"  Модель: {params.get('model_name', 'N/A')}")
+        print(f"  Данные: {params.get('data_path', 'N/A')}")
+        print(f"  Batch size: {params.get('batch_size', 'N/A')}")
+        print(f"  Эпохи: {params.get('epochs', 'N/A')}")
+        print(f"  Learning rate: {params.get('learning_rate', 'N/A'):.2e}")
+        
+        print(f"\n{Fore.YELLOW}⚙️  ДОПОЛНИТЕЛЬНЫЕ:{Style.RESET_ALL}")
+        print(f"  Max length: {config.get('tokenization', {}).get('max_length', 'N/A')}")
+        print(f"  Warmup ratio: {config.get('training', {}).get('warmup_ratio', 'N/A')}")
+        print(f"  Gradient accumulation: {config.get('training', {}).get('gradient_accumulation', 'N/A')}")
+        
+    except Exception as e:
+        print_error(f"Ошибка загрузки конфигурации: {e}")
+    
+    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
+
+def change_training_params():
+    """Изменение параметров обучения"""
+    print(f"\n{Fore.CYAN}✏️  ИЗМЕНЕНИЕ ПАРАМЕТРОВ{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'-'*40}{Style.RESET_ALL}")
+    
+    print_info("Функция в разработке...")
+    print("Используйте пресеты для быстрого изменения параметров")
+    
+    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
+
+def manage_presets():
+    """Управление пресетами"""
+    print(f"\n{Fore.CYAN}🎯 УПРАВЛЕНИЕ ПРЕСЕТАМИ{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'-'*40}{Style.RESET_ALL}")
+    
+    presets_dir = Path("./configs/presets")
+    if not presets_dir.exists():
+        presets_dir.mkdir(parents=True)
+    
+    presets = sorted([p.stem for p in presets_dir.glob("*.json")])
+    
+    if presets:
+        print_info("Доступные пресеты:")
+        for i, preset in enumerate(presets, 1):
+            print(f"  {i}. {preset}")
+    else:
+        print_warning("Пресеты не найдены")
+    
+    print(f"\n1. 🆕 Создать новый пресет")
+    print("2. 📋 Просмотреть пресет")
+    print("3. ↩️  Назад")
+    
+    choice = input(f"\n{Fore.YELLOW}Выберите действие (1-3): {Style.RESET_ALL}").strip()
+    
+    if choice == "1":
+        create_preset_interactive()
+    elif choice == "2" and presets:
+        view_preset(presets)
+    
+    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
+
+def create_preset_interactive():
+    """Создание нового пресета"""
+    print(f"\n{Fore.CYAN}🆕 СОЗДАНИЕ НОВОГО ПРЕСЕТА{Style.RESET_ALL}")
+    
+    preset_name = input(f"{Fore.YELLOW}Имя пресета (латинскими буквами): {Style.RESET_ALL}").strip()
+    if not preset_name:
+        print_error("Имя не может быть пустым")
+        return
+    
+    # Загружаем текущий конфиг как основу
+    current_config = CONFIG_MANAGER.load_full_config()
+    
+    # Создаем пресет на основе важных параметров
+    preset_config = {
+        "meta": {
+            "description": f"Пресет '{preset_name}'",
+            "created": datetime.now().isoformat(),
+            "based_on": "current_config"
+        },
+        "training": {
+            "batch_size": current_config.get("training", {}).get("batch_size", 3),
+            "learning_rate": current_config.get("training", {}).get("learning_rate", 0.0002),
+            "epochs": current_config.get("training", {}).get("epochs", 3),
+            "warmup_ratio": current_config.get("training", {}).get("warmup_ratio", 0.9)
+        }
+    }
+    
+    # Позволяем изменить параметры
+    print_info("\nТекущие значения (нажмите Enter чтобы оставить):")
+    
+    params = [
+        ("batch_size", "Размер батча", int),
+        ("learning_rate", "Скорость обучения", float),
+        ("epochs", "Количество эпох", int),
+        ("warmup_ratio", "Доля warmup", float)
+    ]
+    
+    for key, desc, dtype in params:
+        current = preset_config["training"][key]
+        new_val = input(f"{desc} [{current}]: ").strip()
+        if new_val:
+            try:
+                preset_config["training"][key] = dtype(new_val)
+            except ValueError:
+                print_error(f"Неверный формат, оставляем {current}")
+    
+    # Сохраняем пресет
+    try:
+        CONFIG_MANAGER.save_preset(preset_name, preset_config)
+        print_success(f"Пресет '{preset_name}' сохранен!")
+    except Exception as e:
+        print_error(f"Ошибка сохранения: {e}")
+
+def view_preset(presets):
+    """Просмотр пресета"""
+    choice = input(f"{Fore.YELLOW}Выберите пресет для просмотра (1-{len(presets)}): {Style.RESET_ALL}").strip()
+    
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(presets):
+            preset_name = presets[idx]
+            try:
+                preset_config = CONFIG_MANAGER.load_preset(preset_name)
+                
+                print(f"\n{Fore.CYAN}📋 ПРЕСЕТ: {preset_name}{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}{'-'*40}{Style.RESET_ALL}")
+                
+                if "meta" in preset_config:
+                    print(f"Описание: {preset_config['meta'].get('description', 'Нет описания')}")
+                
+                if "training" in preset_config:
+                    print(f"\n{Fore.YELLOW}Параметры обучения:{Style.RESET_ALL}")
+                    for key, value in preset_config["training"].items():
+                        print(f"  {key}: {value}")
+            except Exception as e:
+                print_error(f"Ошибка загрузки пресета: {e}")
+
+def check_logs():
+    """Просмотр логов (упрощенная версия)"""
+    print(f"\n{Fore.CYAN}📊 ПРОСМОТР ЛОГОВ{Style.RESET_ALL}")
+    
+    # Ищем логи в истории директорий
     history = get_directory_history()
     
-    if history:
-        print(f"{Fore.YELLOW}📚 ИСТОРИЯ ВЫБОРА:{Style.RESET_ALL}")
-        for i, (name, path) in enumerate(history, 1):
-            # Проверяем существование
-            exists = "✅" if Path(path).exists() else "❌"
-            print(f"{i}. {exists} {name}")
+    if not history:
+        print_warning("История директорий пуста")
+        input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
+        return
     
-    print(f"\n{Fore.YELLOW}⚡ БЫСТРЫЕ ВАРИАНТЫ:{Style.RESET_ALL}")
-    print("n. 📁 Новая директория (ввести путь)")
+    print_info("Выберите директорию для просмотра логов:")
+    for i, (name, path) in enumerate(history, 1):
+        print(f"{i}. {name}")
     
-    if history:
-        print("0. ↩️  Отмена")
+    choice = input(f"\n{Fore.YELLOW}Выберите (1-{len(history)}): {Style.RESET_ALL}").strip()
     
-    print(f"\n{Fore.CYAN}{'-'*60}{Style.RESET_ALL}")
-    
-    # Выбор пользователя
-    while True:
-        choice = input(f"\n{Fore.YELLOW}Выберите вариант (1-{len(history)}, n, или 0): {Style.RESET_ALL}").strip().lower()
-        
-        if choice == '0' and history:
-            return None  # Отмена
-        elif choice == 'n':
-            return create_new_directory_interactive()
-        elif choice.isdigit() and history:
-            idx = int(choice) - 1
-            if 0 <= idx < len(history):
-                selected_path = history[idx][1]
-                if Path(selected_path).exists():
-                    print_success(f"Выбрано: {selected_path}")
-                    save_to_history(selected_path)
-                    return selected_path
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(history):
+            log_dir = Path(history[idx][1]) / "logs"
+            if log_dir.exists():
+                log_files = list(log_dir.glob("*.log"))
+                if log_files:
+                    latest = max(log_files, key=lambda x: x.stat().st_mtime)
+                    print_info(f"Последний лог: {latest.name}")
+                    
+                    # Показываем последние 20 строк
+                    try:
+                        with open(latest, 'r', encoding='utf-8') as f:
+                            lines = f.readlines()[-20:]
+                            print(f"\n{Fore.CYAN}Последние строки:{Style.RESET_ALL}")
+                            for line in lines:
+                                print(line.rstrip())
+                    except:
+                        print_error("Ошибка чтения лога")
                 else:
-                    print_warning(f"Директория не существует: {selected_path}")
-                    recreate = input(f"Создать её заново? (y/n): ").lower()
-                    if recreate == 'y':
-                        Path(selected_path).mkdir(parents=True, exist_ok=True)
-                        print_success(f"Директория создана: {selected_path}")
-                        save_to_history(selected_path)
-                        return selected_path
-        else:
-            print_error("Неверный выбор. Попробуйте снова.")
-
-def select_from_history(path_manager):
-    """Выбор из истории"""
-    menu_items = path_manager.get_history_menu()
+                    print_warning("Логи не найдены")
+            else:
+                print_warning(f"Директория логов не найдена: {log_dir}")
     
-    if not menu_items:
-        print_warning("История пуста")
-        return None
-    
-    print(f"\n{Fore.CYAN}История:{Style.RESET_ALL}")
-    for display, path in menu_items:
-        if path:  # Это элемент с путем
-            print(f"{display}")
-        else:     # Это заголовок
-            print(f"\n{display}")
-    
-    print(f"\n{Fore.YELLOW}0. ↩️  Назад{Style.RESET_ALL}")
-    
-    try:
-        choice = int(input(f"\n{Fore.YELLOW}Выберите директорию: {Style.RESET_ALL}"))
-        if choice == 0:
-            return None
-        
-        # Считаем реальные элементы с путями
-        path_items = [(d, p) for d, p in menu_items if p]
-        if 1 <= choice <= len(path_items):
-            selected_path = path_items[choice-1][1]
-            print_success(f"Выбрано: {selected_path}")
-            
-            # Показываем содержимое
-            if Path(selected_path).exists():
-                print_info("Содержимое:")
-                for item in Path(selected_path).iterdir():
-                    if item.is_dir():
-                        print(f"  📁 {item.name}/")
-                    else:
-                        print(f"  📄 {item.name}")
-            
-            confirm = input(f"\n{Fore.YELLOW}Использовать эту директорию? (y/n): {Style.RESET_ALL}").lower()
-            if confirm == 'y':
-                return selected_path
-        
-    except (ValueError, IndexError):
-        print_error("Неверный выбор")
-    
-    return None
-
-def create_new_directory(path_manager):
-    """Создание новой директории"""
-    print(f"\n{Fore.CYAN}🆕 СОЗДАНИЕ НОВОЙ ДИРЕКТОРИИ{Style.RESET_ALL}")
-    
-    # Предлагаем базовый путь
-    base_path = input(f"{Fore.YELLOW}Базовый путь [./experiments]: {Style.RESET_ALL}").strip()
-    if not base_path:
-        base_path = "./experiments"
-    
-    # Имя эксперимента
-    exp_name = input(f"{Fore.YELLOW}Имя эксперимента: {Style.RESET_ALL}").strip()
-    if not exp_name:
-        exp_name = f"psych_train_{datetime.now().strftime('%Y%m%d_%H%M')}"
-    
-    try:
-        exp_dir = path_manager.create_experiment_dir(base_path, exp_name)
-        print_success(f"Создана директория: {exp_dir}")
-        return str(exp_dir)
-    except Exception as e:
-        print_error(f"Ошибка создания: {e}")
-        return None
-
-def specify_custom_path(path_manager):
-    """Указание своего пути"""
-    print(f"\n{Fore.CYAN}📂 УКАЗАНИЕ СВОЕГО ПУТИ{Style.RESET_ALL}")
-    
-    custom_path = input(f"{Fore.YELLOW}Введите полный путь: {Style.RESET_ALL}").strip()
-    
-    if not custom_path:
-        print_warning("Путь не указан")
-        return None
-    
-    path = Path(custom_path)
-    
-    # Проверяем существование
-    if not path.exists():
-        create = input(f"{Fore.YELLOW}Директория не существует. Создать? (y/n): {Style.RESET_ALL}").lower()
-        if create == 'y':
-            try:
-                path.mkdir(parents=True, exist_ok=True)
-                print_success(f"Директория создана: {path}")
-            except Exception as e:
-                print_error(f"Ошибка создания: {e}")
-                return None
-        else:
-            return None
-    
-    # Добавляем в историю
-    path_manager._add_to_history('experiments', str(path), 'last_experiment')
-    
-    return str(path)
+    input(f"\n{Fore.CYAN}Нажмите Enter для продолжения...{Style.RESET_ALL}")
 
 # ============================================================================
 # ГЛАВНОЕ МЕНЮ
@@ -926,35 +1014,15 @@ def specify_custom_path(path_manager):
 
 def main():
     """Главное меню лаунчера"""
-    # Инициализация
-    print_header()
-    
-    # Проверяем наличие workout.py
-    if not Path("workout.py").exists():
-        print_error("Файл workout.py не найден!")
-        print("Убедитесь, что он находится в той же папке")
-        input("\nНажмите Enter для выхода...")
-        return
-    
-    # Загружаем начальную конфигурацию
-    try:
-        CONFIG_MANAGER.load_full_config()
-        print_success("Конфигурация загружена")
-    except Exception as e:
-        print_error(f"Ошибка загрузки конфигурации: {e}")
-    
-    time.sleep(1)
-    
-    # Главный цикл меню
     while True:
         print_header()
-        print(f"{Fore.CYAN}{Style.BRIGHT}🏠 ГЛАВНОЕ МЕНЮ")
+        print(f"{Fore.CYAN}{Style.BRIGHT}🏠 ГЛАВНОЕ МЕНЮ{Style.RESET_ALL}")
         print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
         
         print("1. 🚀 Запустить обучение")
-        print("2. ⚙️  Управление конфигурацией")
-        print("3. 📊 Просмотреть логи")
-        print("4. 🧪 Тестирование модели")
+        print("2. 🎭 Создать диалоги для обучения")
+        print("3. ⚙️  Управление конфигурацией")
+        print("4. 📊 Просмотреть логи")
         print("5. ❌ Выход")
         
         choice = input(f"\n{Fore.YELLOW}Выберите действие (1-5): {Style.RESET_ALL}").strip()
@@ -962,11 +1030,11 @@ def main():
         if choice == "1":
             start_training()
         elif choice == "2":
-            manage_configuration()
+            create_dialogues()
         elif choice == "3":
-            check_logs()
+            manage_configuration()
         elif choice == "4":
-            test_model()
+            check_logs()
         elif choice == "5":
             print_header()
             print(f"{Fore.GREEN}{Style.BRIGHT}До свидания! Спасибо за использование RUZANNA! 👋{Style.RESET_ALL}\n")
@@ -986,4 +1054,6 @@ if __name__ == "__main__":
         print(f"\n\n{Fore.YELLOW}Программа прервана пользователем{Style.RESET_ALL}")
     except Exception as e:
         print(f"\n\n{Fore.RED}Критическая ошибка: {e}{Style.RESET_ALL}")
+        import traceback
+        traceback.print_exc()
         input("Нажмите Enter для выхода...")
