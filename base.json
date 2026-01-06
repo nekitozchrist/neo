@@ -1,0 +1,96 @@
+{
+  "meta": {
+    "name": "Ruzanna - Psychological AI Trainer",
+    "version": "2.0.0",
+    "description": "ТРИЗ-оптимизированное обучение психологической модели"
+  },
+
+  "system": {
+    "device": "cuda",
+    "seed": 42,
+    "deterministic": false,
+    "precision": "fp16"
+  },
+
+  "paths": {
+    "data": "C:/Files/processed_epitome/quality_psych_dialogues_enhanced.json",
+    "logs": "./logs_advanced",
+    "checkpoints": "./checkpoints",
+    "output": "./output"
+  },
+
+  "data": {
+    "max_dialogues": 10000,
+    "train_split": 0.85,
+    "val_split": 0.15,
+    "test_split": 0.0,
+    "shuffle": true,
+    "cache_processed": true
+  },
+
+  "tokenization": {
+    "max_length": 729,
+    "padding": "max_length",
+    "truncation": true,
+    "add_special_tokens": true
+  },
+
+  "training": {
+    "epochs": 3,
+    "batch_size": 3,
+    "gradient_accumulation": 9,
+    "effective_batch_size": 27,
+    "learning_rate": 0.0002,
+    "weight_decay": 0.01,
+    "warmup_ratio": 0.9,
+    "max_grad_norm": 1.0
+  },
+
+  "model": {
+    "name": "EleutherAI/gpt-neo-2.7B",
+    "use_cache": false,
+    "gradient_checkpointing": true,
+    "resume_from_checkpoint": null
+  },
+
+  "checkpoint": {
+    "save_strategy": "steps",
+    "save_steps": 100,
+    "save_total_limit": 3,
+    "load_best_model_at_end": true,
+    "metric_for_best_model": "loss"
+  },
+
+  "evaluation": {
+    "eval_strategy": "steps",
+    "eval_steps": 100,
+    "eval_batch_size": 2
+  },
+
+  "logging": {
+    "logging_steps": 10,
+    "logging_dir": "./logs",
+    "report_to": "none"
+  },
+
+  "optimization": {
+    "scheduler": "cosine",
+    "num_cycles": 0.5,
+    "use_triz_suggestions": false
+  },
+
+  "monitoring": {
+    "enable_csv_logging": true,
+    "enable_tensorboard": false,
+    "log_memory": true,
+    "log_gpu_power": true
+  },
+
+  "launcher": {
+    "theme": "psych",
+    "show_colors": true,
+    "progress_animation": true,
+    "default_mode": "balanced",
+    "auto_suggest": true
+  }
+}
