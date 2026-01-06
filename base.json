@@ -13,7 +13,7 @@
   },
 
   "paths": {
-    "data": "C:/Files/processed_epitome/quality_psych_dialogues_enhanced.json",
+    "data": "./data",
     "logs": "./logs_advanced",
     "checkpoints": "./checkpoints",
     "output": "./output"
