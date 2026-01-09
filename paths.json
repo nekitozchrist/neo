@@ -1,0 +1,12 @@
+{
+  "source_model_dir": "C:/projects/my_project/models",
+  "result_model_dir": "D:/Ruzanna",
+  "final_model_dir": "${result_model_dir}/final",
+  "checks_dir": "${result_model_dir}/checkpoints",
+  "data_dir": "${result_model_dir}/data",
+  "logs_dir": "${result_model_dir}/logs",
+  "temp_dir": "${result_model_dir}/temp",
+  "dataset_dir": "C:/Files/datasets/epitome/data",
+  "dataset_file": "${data_dir}/dialogs.json"
+  
+}
