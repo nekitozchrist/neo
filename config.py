@@ -186,41 +186,72 @@ def find_yaml_files(directory):
 				yaml_files.append(Path(root) / f"{file}")
 	return yaml_files
 
-def resolve_vars(data, context):
-	"""Рекурсивная подстановка переменных до полного разрешения"""
-	if isinstance(data, dict):
-		return {key: resolve_vars(value, context) for key, value in data.items()}
-	elif isinstance(data, list):
-		return [resolve_vars(item, context) for item in data]
-	elif isinstance(data, str):
-		# Продолжаем подставлять, пока есть переменные
-		while True:
-			matches = re.findall(r'\$\{(\w+)\}', data)
-			if not matches:
-				break
-			original = data
-			for var_name in matches:
-				if var_name in context:
-					data = data.replace(f'${{{var_name}}}', str(context[var_name]))
-			if data == original:  # Если ничего не изменилось, выходим
-				break
-		return data
+# Загрузка конфига
+config_path = Path(__file__).parent / "config.yaml"
+with open(config_path, "r", encoding="utf-8") as f:
+	raw_config = yaml.safe_load(f)
+
+def _replace_placeholders_in_string(s, context):
+	"""Заменяет плейсхолдеры ${...} в строке на значения из контекста"""
+	pattern = re.compile(r'\$\{([^}]+)\}')
+	def replace(match):
+		key = match.group(1)
+		if key in context:
+			return str(context[key])
+		else:
+			raise KeyError(f"Неизвестный плейсхолдер: {key}")
+	return pattern.sub(replace, s)
+
+def _resolve_structure(obj, context):
+	"""Рекурсивно разрешает плейсхолдеры в структуре данных"""
+	if isinstance(obj, dict):
+		return {k: _resolve_structure(v, context) for k, v in obj.items()}
+	elif isinstance(obj, list):
+		return [_resolve_structure(v, context) for v in obj]
+	elif isinstance(obj, str):
+		return _replace_placeholders_in_string(obj, context)
 	else:
-		return data
+		return obj
 
-# 1. Определяем путь к config.yaml
-SCRIPT_DIR = Path(__file__).parent
-CONFIG_PATH = SCRIPT_DIR / 'config.yaml'
+def resolve_flat_dict(d):
+	"""Разрешает взаимные ссылки в плоском словаре (для paths)"""
+	changed = True
+	while changed:
+		changed = False
+		for key, value in d.items():
+			if isinstance(value, str):
+				new_value = _replace_placeholders_in_string(value, d)
+				if new_value != value:
+					d[key] = new_value
+					changed = True
+	return d
 
-# 2. Читаем YAML
-try:
-	with CONFIG_PATH.open('r', encoding='utf-8') as f:
-		data = yaml.safe_load(f)
-except FileNotFoundError:
-	raise FileNotFoundError(f"Не найден файл конфигурации: {CONFIG_PATH}")
-except Exception as e:
-	raise Exception(f"Ошибка чтения YAML: {e}")
+# Обработка конфига в зависимости от формата
+if 'paths' in raw_config or 'training' in raw_config:
+	# Новый формат с разделами
+	# 1. Обрабатываем paths (разрешаем взаимные ссылки)
+	if 'paths' in raw_config:
+		paths = raw_config['paths']
+		paths = resolve_flat_dict(paths)
+		raw_config['paths'] = paths
+	else:
+		paths = {}
 
-# 3. Подставляем переменные
-context = data.copy()
-config = resolve_vars(data, context)
+	# 2. Используем paths как контекст для остальных разделов
+	context = paths
+
+	# 3. Обрабатываем остальные разделы
+	for key in raw_config:
+		if key != 'paths':
+			raw_config[key] = _resolve_structure(raw_config[key], context)
+
+	# 4. Объединяем все разделы в один плоский словарь для обратной совместимости
+	config = {}
+	for key, value in raw_config.items():
+		if isinstance(value, dict):
+			config.update(value)  # добавляем все ключи из словаря
+		else:
+			config[key] = value
+else:
+	# Старый формат (плоский)
+	config = resolve_flat_dict(raw_config)
