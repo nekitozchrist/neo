@@ -22,6 +22,12 @@ if ma: print()
 import os
 if ma: print(ts(st, "os"))
 
+import sys
+if ma: print(ts(st, "sys"))
+
+from contextlib import redirect_stdout, redirect_stderr
+if ma: print(ts(st, "contextlib"))
+
 import math
 if ma: print(ts(st, "math"))
 
@@ -37,7 +43,7 @@ if ma: print(ts(st, "numpy"))
 from pathlib import Path
 if ma: print(ts(st, "pathlib"))
 
-from config import config, clear_screen, error, header, info, progress_bar, success, title, warning
+from config import config, clear_screen, error, header, info, progress_bar, success, title, warning, rulables
 if ma: print(ts(st, "config"))
 
 from tqdm import tqdm
@@ -71,7 +77,7 @@ if ma: print("\n" + ts(tot, "Общее время импортов") + "\n")
 
 MODEL_NAME = config['source_model_dir']
 MAX_LEN = 512
-BATCH_SIZE = 8
+BATCH_SIZE = 2
 ACCUMULATION_STEPS = 4
 LEARNING_RATE = 5e-05
 EPOCHS = 3
@@ -82,8 +88,27 @@ USE_TRITON = True
 CHECKPOINTS_DIR = config['checks_dir']
 LOG_DIR = config['logs_dir']
 OUTPUT_DIR = config['final_model_dir']
-TASK_TYPE = "emotional_reactions"  # или "interpretations", "explorations"
 
+# Функция для подавления вывода
+def suppress_output(func):
+	def wrapper(*args, **kwargs):
+		# Для Windows
+		if os.name == 'nt':
+			with open('NUL', 'w') as f:
+				old_stdout = sys.stdout
+				old_stderr = sys.stderr
+				sys.stdout = f
+				sys.stderr = f
+				try:
+					return func(*args, **kwargs)
+				finally:
+					sys.stdout = old_stdout
+					sys.stderr = old_stderr
+	return wrapper
+
+@suppress_output
+def compile_model(model):
+	return torch.compile(model, backend="inductor", mode="default")
 
 class EmotionsDataset(Dataset):
 	def __init__(self, texts, labels, tokenizer, max_len):
@@ -126,25 +151,25 @@ def train():
 
 	# Токенизатор и модель
 	tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-	model = AutoModelForSequenceClassification.from_pretrained(
-		MODEL_NAME,
-		num_labels=28
-	)
-	model.to(device, non_blocking=True)
-
-	# Компиляция с Triton (опционально)
-	if USE_TRITON and torch.cuda.is_available():
-		model = torch.compile(model, backend="inductor", mode="default")
-		print("Triton включён (inductor + default)")
 
 	# Загрузка данных из .pkl
 	data_path = Path(config['data_dir']) / "ru_goemotions_metadata.pkl"
 	with open(data_path, "rb") as f:
 		processed_data = pickle.load(f)
-	print(processed_data.keys())
+
+	info(f"Ключи в данных: {processed_data.keys()}")
 
 	# Проверка обязательных ключей
 	required_keys = ["train", "val", "vectorizer", "label2id", "id2label"]
+	missing_keys = [k for k in required_keys if k not in processed_data]
+	if missing_keys:
+		print(f"⚠ Отсутствующие ключи: {missing_keys}")
+		# Создаем недостающие ключи на лету
+		if "label2id" not in processed_data:
+		   label2id = {name: idx for idx, name in enumerate(rulables().keys())}
+		   processed_data["label2id"] = label2id
+		if "id2label" not in processed_data:
+		   processed_data["id2label"] = {v: k for k, v in processed_data["label2id"].items()}
 	assert all(k in processed_data for k in required_keys), "Не все ключи присутствуют в .pkl"
 
 
@@ -154,17 +179,58 @@ def train():
 	val_texts = processed_data["val"]["texts"]
 	val_labels = processed_data["val"]["labels"]
 
+	# Получаем количество классов из label2id
+	num_classes = len(processed_data["label2id"])
+	print(f"Количество классов: {num_classes}")
+
 	print(f"Обучающие примеры: {len(train_texts)}")
 	print(f"Валидационные примеры: {len(val_texts)}")
 
-	mlb = MultiLabelBinarizer(classes=list(range(27)))  # 27 классов
+	print("Загрузка модели RoBERTa...", end="", flush=True)
+
+	# Временно подавляем предупреждения transformers
+	import warnings
+	from transformers import logging as transformers_logging
+
+	# Сохраняем текущий уровень
+	old_verbosity = transformers_logging.get_verbosity()
+	transformers_logging.set_verbosity_error()
+
+	# Игнорируем конкретное предупреждение
+	warnings.filterwarnings("ignore",
+		message="Some weights of RobertaForSequenceClassification were not initialized")
+
+	try:
+		model = AutoModelForSequenceClassification.from_pretrained(
+			MODEL_NAME,
+			num_labels=num_classes
+		)
+
+		print(f"\r{Fore.GREEN}✓ Модель загружена{Style.RESET_ALL}")
+
+		# Показываем информацию о модели
+		success(f"Классификатор настроен на {num_classes} классов")
+
+	finally:
+		# Восстанавливаем настройки
+		transformers_logging.set_verbosity(old_verbosity)
+		warnings.resetwarnings()
+	model.to(device, non_blocking=True)
+
+	# Компиляция с Triton (опционально)
+	if USE_TRITON and torch.cuda.is_available():
+		torch.set_float32_matmul_precision('high')
+		model = compile_model(model)
+		print("Triton включён (inductor + default)")
+
+	# Используем правильное количество классов
+	mlb = MultiLabelBinarizer(classes=list(range(num_classes)))
 	train_labels_onehot = mlb.fit_transform(train_labels)
 	val_labels_onehot = mlb.transform(val_labels)
 
 	# Создание датасетов
 	train_dataset = EmotionsDataset(train_texts, train_labels_onehot, tokenizer, MAX_LEN)
 	val_dataset = EmotionsDataset(val_texts, val_labels_onehot, tokenizer, MAX_LEN)
-
 
 	# Создание даталоадеров
 	train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
@@ -311,7 +377,6 @@ def train():
 	model.save_pretrained(OUTPUT_DIR)
 	tokenizer.save_pretrained(OUTPUT_DIR)
 	print(f"Финальная модель сохранена в {OUTPUT_DIR}")
-
 
 if __name__ == "__main__":
 	train()
