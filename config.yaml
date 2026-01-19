@@ -1,1 +1,23 @@
+# config.yaml
+paths:
+  base_dir: ./project
+  result_model_dir: ${base_dir}/result # Результат обучения
+  checks_dir: ${result_model_dir}/checkpoints # Чекпоинты
+  final_model_dir: ${result_model_dir}/final # Финальаня модель
+  logs_dir: ${result_model_dir}/logs # Логи и мониторинг
+  temp_dir: ${result_model_dir}/temp # Временные файлы
 
+  source_model_dir: ${base_dir}/rubert #Исходная модель
+  dataset_dir: ${base_dir}/goemotions #Датасет
+  data_dir: ${result_model_dir}/data #Метаданные
+
+training:
+  epochs: 3
+  max_len: 256  # Можно уменьшить для ускорения (было 512)
+  batch_size: 2  # Для ruRoberta-large нужно маленькое значение
+  accumulation_steps: 8  # Эффективный batch: 16
+  learning_rate: 1e-5  # Меньше для больших моделей
+  warmup_steps: 100
+  weight_decay: 0.01
+  fp32: False  # Включить AMP для ускорения!
+  use_triton: True
