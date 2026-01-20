@@ -55,6 +55,9 @@ if ma: print(ts(st, "torch"))
 import torch.nn as nn
 if ma: print(ts(st, "torch.nn"))
 
+import ast
+if ma: print(ts(st, "ast"))
+
 from sklearn.preprocessing import MultiLabelBinarizer
 if ma: print(ts(st, "sklearn"))
 
@@ -134,14 +137,7 @@ LEARNING_RATE = float(config['learning_rate'])
 WARMUP_STEPS = int(config['warmup_steps'])
 WEIGHT_DECAY = float(config['weight_decay'])
 FP32 = config['fp32']
-if isinstance(FP32, str):
-	FP32 = FP32.lower() == 'true'
 USE_TRITON = config['use_triton']
-if isinstance(USE_TRITON, str):
-	USE_TRITON = USE_TRITON.lower() == 'true'
-
-
-
 
 # После загрузки констант из config, добавьте проверку:
 print(f"{Fore.CYAN}{Style.BRIGHT}=== КОНФИГУРАЦИЯ ОБУЧЕНИЯ ==={Style.RESET_ALL}")
@@ -193,8 +189,7 @@ class MultiLabelEmotionsDataset(Dataset):
 
 	def __getitem__(self, item):
 		text = str(self.texts[item])
-		# Метка уже в формате многометочного бинарного вектора
-		label = torch.tensor(self.labels[item], dtype=torch.float)
+		label = torch.tensor(self.labels[item], dtype=torch.float)  # ← Важно: torch.float
 
 		encoding = self.tokenizer(
 			text,
@@ -207,8 +202,13 @@ class MultiLabelEmotionsDataset(Dataset):
 		return {
 			'input_ids': encoding['input_ids'][0],
 			'attention_mask': encoding['attention_mask'][0],
-			'labels': label  # Отправляем вектор, а не индекс
+			'labels': label  # One-hot вектор с float типом
 		}
+
+		# Проверка формата меток
+		assert len(train_labels[0]) == 28, f"Ожидалось 28 классов, получено {len(train_labels[0])}"
+		assert train_labels[0].dtype == np.int64 or train_labels[0].dtype == np.float64, f"Неверный тип меток: {train_labels[0].dtype}"
+		print(f"✅ Метки преобразованы в one-hot формат: {train_labels.shape[1]} классов")
 
 # ========== ФУНКЦИИ ДЛЯ ВЫЧИСЛЕНИЯ МЕТРИК ==========
 def multi_label_metrics(predictions, labels, threshold=0.5):
@@ -334,6 +334,22 @@ def train(test_mode=False, test_sample_size=100):
 	val_texts = processed_data["val"]["texts"]
 	val_labels = processed_data["val"]["labels"]
 
+	# Создаем one-hot векторы для 28 классов
+	mlb = MultiLabelBinarizer(classes=range(28))
+
+	# Преобразуем списки меток в one-hot векторы
+	train_labels_onehot = mlb.fit_transform(train_labels)
+	val_labels_onehot = mlb.transform(val_labels)
+
+	# Заменяем исходные метки
+	train_labels = train_labels_onehot
+	val_labels = val_labels_onehot
+
+	# Отладочный вывод
+	print(f"Пример метки до преобразования: {processed_data['train']['labels'][0]}")
+	print(f"Пример метки после преобразования: {train_labels[0]}")
+	print(f"Сумма в примере (сколько эмоций): {train_labels[0].sum()}")
+
 	# Тестовый режим: ограничение данных
 	if test_mode and test_sample_size:
 		info(f"Ограничение данных до {test_sample_size} примеров")
@@ -426,7 +442,8 @@ def train(test_mode=False, test_sample_size=100):
 		weight_decay=WEIGHT_DECAY,
 		learning_rate=LEARNING_RATE,
 		logging_dir=str(LOG_DIR),
-		logging_strategy=test_logging_steps,
+		logging_strategy="steps",
+		logging_steps = test_logging_steps,
 		eval_strategy="epoch",
 		save_strategy="epoch" if not test_mode else "no",
 		save_total_limit=2,
