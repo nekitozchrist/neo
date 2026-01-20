@@ -73,7 +73,7 @@ if ma: print(ts(st, "torch.utils.data"))
 from torch.utils.tensorboard import SummaryWriter
 if ma: print(ts(st, "torch.utils.tensorboard"))
 
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments, get_linear_schedule_with_warmup
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_constant_schedule_with_warmup
 if ma: print(ts(st, "transformers"))
 
 if ma: print("\n" + ts(tot, "Общее время импортов") + "\n")
@@ -431,99 +431,258 @@ def train(test_mode=False, test_sample_size=100):
 	os.makedirs(LOG_DIR, exist_ok=True)
 	os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-	# Настройки TrainingArguments
-	training_args = TrainingArguments(
-		output_dir=str(CHECKPOINTS_DIR),
-		overwrite_output_dir=True,
-		num_train_epochs=test_epochs,
-		per_device_train_batch_size=test_batch_size,
-		per_device_eval_batch_size=test_batch_size * 2,
-		warmup_steps=WARMUP_STEPS,
-		weight_decay=WEIGHT_DECAY,
-		learning_rate=LEARNING_RATE,
-		logging_dir=str(LOG_DIR),
-		logging_strategy="steps",
-		logging_steps = test_logging_steps,
-		eval_strategy="epoch",
-		save_strategy="epoch" if not test_mode else "no",
-		save_total_limit=2,
-		load_best_model_at_end=not test_mode,
-		metric_for_best_model="f1",
-		greater_is_better=True,
-		fp16=not FP32,
-		gradient_accumulation_steps=ACCUMULATION_STEPS,
-		report_to="tensorboard",
-		dataloader_pin_memory=True if device.type == "cuda" else False,
-		dataloader_num_workers=0,
-		remove_unused_columns=False,
+	# ========== СОЗДАНИЕ DATALOADER ==========
+	info("Создание DataLoader...")
+	train_dataset = MultiLabelEmotionsDataset(train_texts, train_labels_onehot, tokenizer, MAX_LEN)
+	val_dataset = MultiLabelEmotionsDataset(val_texts, val_labels_onehot, tokenizer, MAX_LEN)
+
+	train_loader = DataLoader(
+		train_dataset,
+		batch_size=test_batch_size,
+		shuffle=True,
+		num_workers=0,
+		pin_memory=True if device.type == "cuda" else False
+	)
+	val_loader = DataLoader(
+		val_dataset,
+		batch_size=test_batch_size * 2,
+		shuffle=False,
+		num_workers=0,
+		pin_memory=True if device.type == "cuda" else False
 	)
 
-	# ========== СОЗДАНИЕ TRAINER ==========
-	trainer = Trainer(
-		model=model,
-		args=training_args,
-		train_dataset=train_dataset,
-		eval_dataset=val_dataset,
-		compute_metrics=compute_metrics,
-		tokenizer=tokenizer,
+	# ========== ПОДГОТОВКА ОПТИМИЗАТОРА И SCHEDULER ==========
+	info("Подготовка оптимизатора...")
+
+	# Более консервативный learning rate для начала
+	current_lr = LEARNING_RATE
+	info(f"Используется learning rate: {current_lr}")
+
+	# Группируем параметры для weight decay
+	no_decay = ["bias", "LayerNorm.weight"]
+	optimizer_grouped_parameters = [
+		{
+			"params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+			"weight_decay": WEIGHT_DECAY,
+		},
+		{
+			"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+			"weight_decay": 0.0,
+		},
+	]
+
+	optimizer = AdamW(
+		optimizer_grouped_parameters,
+		lr=current_lr,
+		betas=(0.9, 0.999),
+		eps=1e-8
 	)
 
-	# ========== ЗАПУСК ОБУЧЕНИЯ ==========
-	success("Начало обучения...")
+	# Постоянный scheduler с прогревом - ПРОЩЕ И СТАБИЛЬНЕЕ
+	total_steps = len(train_loader) // ACCUMULATION_STEPS * test_epochs
+	warmup_steps = 500  # Фиксированные 500 шагов на прогрев
+	info(f"Общее шагов: {total_steps}, Прогрев: {warmup_steps} шагов")
 
-	print(f"{Fore.CYAN}Конфигурация:{Style.RESET_ALL}")
-	print(f"  Режим: {'ТЕСТ' if test_mode else 'ОБУЧЕНИЕ'}")
-	print(f"  Модель: {MODEL_NAME}")
-	print(f"  Эпохи: {test_epochs}")
-	print(f"  Примеров: {len(train_dataset)} обучающих, {len(val_dataset)} валидационных")
-	print(f"  Batch size: {test_batch_size} × {ACCUMULATION_STEPS} = {test_batch_size * ACCUMULATION_STEPS}")
-	print(f"  Learning rate: {LEARNING_RATE}")
-	print(f"  Max length: {MAX_LEN}")
-	print(f"  Mixed precision: {'выключен' if FP32 else 'включен'}")
-	print(f"  Устройство: {device}")
+	scheduler = get_constant_schedule_with_warmup(
+		optimizer,
+		num_warmup_steps=warmup_steps
+	)
+	# Этот scheduler: 0 → LR за warmup_steps → потом постоянный LR
 
-	# Запуск обучения
-	train_result = trainer.train()
+	# Mixed Precision
+	scaler = GradScaler(enabled=not FP32)
 
-	# ========== СОХРАНЕНИЕ РЕЗУЛЬТАТОВ ==========
+	# TensorBoard
+	writer = SummaryWriter(LOG_DIR)
+
+	# ========== ФУНКЦИЯ ПРЕОБРАЗОВАНИЯ МЕТОК ==========
+	def prepare_targets(label_indices_batch, num_classes=num_classes, device=device):
+		"""
+		Преобразует батч списков индексов [[0,5], [2], ...] в one-hot тензор.
+		"""
+		if isinstance(label_indices_batch, torch.Tensor):
+			# Уже one-hot тензор
+			return label_indices_batch.to(device)
+
+		batch_size = len(label_indices_batch)
+		targets = torch.zeros(batch_size, num_classes, device=device, dtype=torch.float)
+
+		for i, indices in enumerate(label_indices_batch):
+			if isinstance(indices, (list, np.ndarray)) and len(indices) > 0:
+				targets[i, indices] = 1.0
+
+		return targets
+
+	# ========== КАСТОМНЫЙ ЦИКЛ ОБУЧЕНИЯ ==========
+	info(f"Старт обучения на {test_epochs} эпох...")
+	global_step = 0
+	best_f1 = 0.0
+
+	for epoch in range(test_epochs):
+		# Динамический порог классификации
+		threshold = 0.3  # Начинаем с более низкого порога
+		if epoch > 0 and f1 < 0.1:  # Если на предыдущей эпохе F1 был очень низким
+			threshold = max(0.1, threshold * 0.9)  # Понижаем порог
+			info(f"Понижение порога классификации до {threshold:.2f}")
+		# ------ ФАЗА ОБУЧЕНИЯ ------
+		model.train()
+		total_train_loss = 0
+		progress_bar = tqdm(train_loader, desc=f"Эпоха {epoch+1}/{test_epochs} [Обучение]")
+
+		for step, batch in enumerate(progress_bar):
+			# Подготовка батча
+			input_ids = batch['input_ids'].to(device)
+			attention_mask = batch['attention_mask'].to(device)
+
+			# Подготовка меток (уже в one-hot формате)
+			labels = batch['labels'].to(device)
+
+			# Forward pass с mixed precision
+			with autocast(device_type=device.type, enabled=not FP32):
+				outputs = model(
+					input_ids=input_ids,
+					attention_mask=attention_mask,
+					labels=labels
+				)
+				loss = outputs.loss
+				loss = loss / ACCUMULATION_STEPS
+
+			# Backward pass
+			scaler.scale(loss).backward()
+
+			if (step + 1) % ACCUMULATION_STEPS == 0 or (step + 1) == len(train_loader):
+				scaler.unscale_(optimizer)
+				torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+				# Мониторинг градиентов (только для отладки)
+				if global_step % 50 == 0:
+					grad_norm = 0.0
+					for p in model.parameters():
+						if p.grad is not None:
+							param_norm = p.grad.data.norm(2)
+							grad_norm += param_norm.item() ** 2
+					grad_norm = grad_norm ** 0.5
+					writer.add_scalar("train/grad_norm", grad_norm, global_step)
+
+					# Если градиенты взрываются (>10) - предупреждение
+					if grad_norm > 10.0:
+						warning(f"Большая норма градиентов: {grad_norm:.2f}. Возможно, нужен меньший LR.")
+
+				scaler.step(optimizer)
+				scaler.update()
+				optimizer.zero_grad()
+				scheduler.step()
+				global_step += 1
+
+			# Логирование
+			total_train_loss += loss.item() * ACCUMULATION_STEPS
+			if global_step % 10 == 0:
+				writer.add_scalar("train/loss", loss.item() * ACCUMULATION_STEPS, global_step)
+				writer.add_scalar("train/lr", scheduler.get_last_lr()[0], global_step)
+
+			# Логирование LR в консоль каждые 50 шагов
+			if global_step % 50 == 0:
+				current_lr = scheduler.get_last_lr()[0]
+
+			# writer.add_scalar("train/learning_rate", current_lr, global_step) # Уже есть в TensorBoard
+				if global_step % 200 == 0:  # Реже в консоль, чтобы не засорять
+					info(f"Шаг {global_step}: LR = {current_lr:.2e}")
+
+			progress_bar.set_postfix({"loss": f"{loss.item() * ACCUMULATION_STEPS:.4f}"})
+
+		avg_train_loss = total_train_loss / len(train_loader)
+		info(f"Эпоха {epoch+1}: Средняя тренировочная loss = {avg_train_loss:.4f}")
+
+		# ------ ФАЗА ВАЛИДАЦИИ ------
+		model.eval()
+		total_val_loss = 0
+		all_preds = []
+		all_labels = []
+
+		with torch.no_grad():
+			val_progress = tqdm(val_loader, desc=f"Эпоха {epoch+1}/{test_epochs} [Валидация]")
+			for batch in val_progress:
+				input_ids = batch['input_ids'].to(device)
+				attention_mask = batch['attention_mask'].to(device)
+				labels = batch['labels'].to(device)
+
+				with autocast(device_type=device.type, enabled=not FP32):
+					outputs = model(
+						input_ids=input_ids,
+						attention_mask=attention_mask,
+						labels=labels
+					)
+					loss = outputs.loss
+
+				total_val_loss += loss.item()
+
+				# Собираем предсказания для метрик
+				logits = outputs.logits
+				probs = torch.sigmoid(logits)
+				all_preds.append(probs.cpu())
+				all_labels.append(labels.cpu())
+
+		# Вычисление метрик
+		avg_val_loss = total_val_loss / len(val_loader)
+		all_preds = torch.cat(all_preds)
+		all_labels = torch.cat(all_labels)
+
+		# Вычисляем accuracy
+		preds_binary = (all_preds > threshold).float()
+		correct = (preds_binary == all_labels).sum().item()
+		total = all_labels.numel()
+		accuracy = correct / total
+
+		# Вычисляем F1-score
+		from sklearn.metrics import f1_score
+		f1 = f1_score(all_labels.numpy(), preds_binary.numpy(), average='micro', zero_division=0)
+
+		info(f"Валидация | Loss: {avg_val_loss:.4f} | Accuracy: {accuracy:.4f} | F1-micro: {f1:.4f}")
+		writer.add_scalar("val/loss", avg_val_loss, epoch)
+		writer.add_scalar("val/accuracy", accuracy, epoch)
+		writer.add_scalar("val/f1", f1, epoch)
+
+		# ------ СОХРАНЕНИЕ ЛУЧШЕЙ МОДЕЛИ ------
+		if not test_mode and f1 > best_f1:
+			best_f1 = f1
+			model.save_pretrained(OUTPUT_DIR)
+			tokenizer.save_pretrained(OUTPUT_DIR)
+			success(f"Модель сохранена (новый лучший F1: {f1:.4f})!")
+
+		# Сохранение чекпоинта
+		if not test_mode and CHECKPOINTS_DIR:
+			checkpoint_dir = Path(CHECKPOINTS_DIR) / f"epoch_{epoch+1}"
+			checkpoint_dir.mkdir(parents=True, exist_ok=True)
+			model.save_pretrained(checkpoint_dir)
+			tokenizer.save_pretrained(checkpoint_dir)
+
+	# ========== ФИНАЛИЗАЦИЯ ==========
+	writer.close()
+
 	if not test_mode:
-		info("Сохранение результатов...")
-		trainer.save_model(str(OUTPUT_DIR))
-		tokenizer.save_pretrained(str(OUTPUT_DIR))
-		success(f"✓ Лучшая модель сохранена в: {OUTPUT_DIR}")
-
-		# Сохраняем метрики
-		metrics = train_result.metrics
-		trainer.log_metrics("train", metrics)
-		trainer.save_metrics("train", metrics)
-		trainer.save_state()
-	else:
-		info("Тестовый режим: модель не сохраняется")
-
-	# ========== ФИНАЛЬНАЯ ОЦЕНКА ==========
-	info("Финальная оценка на валидационном наборе...")
-	eval_metrics = trainer.evaluate()
-
-	# ========== ВЫВОД РЕЗУЛЬТАТОВ ==========
-	print(f"\n{Fore.GREEN}{Style.BRIGHT}=== РЕЗУЛЬТАТЫ ==={Style.RESET_ALL}")
-	print(f"Accuracy: {eval_metrics.get('eval_accuracy', 0):.4f}")
-	print(f"Precision: {eval_metrics.get('eval_precision', 0):.4f}")
-	print(f"Recall: {eval_metrics.get('eval_recall', 0):.4f}")
-	print(f"F1-score: {eval_metrics.get('eval_f1', 0):.4f}")
-	print(f"Loss: {eval_metrics.get('eval_loss', 0):.4f}")
-	print(f"Время обучения: {train_result.metrics.get('train_runtime', 0):.1f} сек")
-
-	if test_mode:
-		info("Тестовый режим завершён. Проверьте логи и метрики.")
-		print(f"{Fore.YELLOW}Совет: Если метрики выглядят разумно, запустите полное обучение.{Style.RESET_ALL}")
-	else:
-		success("Обучение завершено успешно!")
+		success(f"Обучение завершено! Лучшая модель сохранена в {OUTPUT_DIR}")
+		print(f"\n{Fore.GREEN}{Style.BRIGHT}=== РЕЗУЛЬТАТЫ ==={Style.RESET_ALL}")
+		print(f"Лучший F1-score: {best_f1:.4f}")
+		print(f"Финальная validation loss: {avg_val_loss:.4f}")
 		print(f"\n{Fore.CYAN}Следующие шаги:{Style.RESET_ALL}")
 		print(f"  1. Проверьте логи TensorBoard: tensorboard --logdir={LOG_DIR}")
 		print(f"  2. Финальная модель сохранена в: {OUTPUT_DIR}")
 		print(f"  3. Используйте модель для предсказаний или дообучения")
 
-	return eval_metrics
+		return {
+			"best_f1": best_f1,
+			"final_val_loss": avg_val_loss,
+			"final_val_accuracy": accuracy
+		}
+	else:
+		success("Тестовый режим завершён!")
+		print(f"\n{Fore.YELLOW}Совет: Если метрики выглядят разумно, запустите полное обучение.{Style.RESET_ALL}")
+
+		return {
+			"test_f1": f1,
+			"test_loss": avg_val_loss,
+			"test_accuracy": accuracy
+		}
 
 def start_train():
 	try:
