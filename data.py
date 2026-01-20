@@ -357,7 +357,7 @@ def data_start():
 			ids += test_df['id'].tolist()
 
 		# Предобработка текстов
-		cleaned_texts = preprocess_texts(texts, min_len=5, max_len=500)
+		cleaned_texts = preprocess_texts(texts, min_len=8, max_len=512)
 
 		# Прогресс‑бар: очистка завершена
 		progress_bar(3, "✓  Очистка текстов")
