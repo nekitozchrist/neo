@@ -49,6 +49,15 @@ if ma: print(ts(st, "config"))
 from tqdm import tqdm
 if ma: print(ts(st, "tqdm"))
 
+from concurrent.futures import ThreadPoolExecutor
+if ma: print(ts(st, "concurrent.futures"))
+
+import threading
+if ma: print(ts(st, "threading"))
+
+from collections import deque
+if ma: print(ts(st, "collections"))
+
 import torch
 if ma: print(ts(st, "torch"))
 
@@ -74,6 +83,15 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_
 if ma: print(ts(st, "transformers"))
 
 if ma: print("\n" + ts(tot, "Общее время импортов") + "\n")
+
+
+# Глобальный кэш токенизированных батчей (в ОЗУ)
+token_cache = {}
+# Очередь предзагруженных батчей
+prefetch_queue = deque()
+# Исполнитель для токенизации
+tokenizer_executor = ThreadPoolExecutor(max_workers=16)
+
 
 def training_menu():
 	"""Меню выбора режима обучения"""
@@ -374,6 +392,20 @@ def train(test_mode=False, test_sample_size=100):
 		transformers_logging.set_verbosity(old_verbosity)
 		warnings.resetwarnings()
 
+	# Переносим embedding на CPU
+	embedding_layer = model.embeddings.to("cpu")
+	model.embeddings = None  # Убираем из GPU
+
+	# Обертка для forward‑пасса
+	def model_forward(input_ids, attention_mask, labels=None):
+		input_embeds = embedding_layer(input_ids.to("cpu")).to("cuda", non_blocking=True)
+		outputs = model(
+			inputs_embeds=input_embeds,
+			attention_mask=attention_mask,
+			labels=labels
+		)
+		return outputs
+
 	# Перемещение модели на устройство
 	model.to(device)
 	info(f"Модель перемещена на: {device}")
@@ -462,6 +494,28 @@ def train(test_mode=False, test_sample_size=100):
 	# TensorBoard
 	writer = SummaryWriter(LOG_DIR)
 
+	def async_tokenize_batch(batch_texts, batch_idx):
+		"""Токенизация на CPU с кэшированием в ОЗУ"""
+		if batch_idx in token_cache:
+			return token_cache[batch_idx]
+		tokens = tokenizer(
+			batch_texts,
+			padding=True,
+			truncation=True,
+			max_length=MAX_LEN,
+			return_tensors="pt"
+		)
+		token_cache[batch_idx] = tokens
+		return tokens
+
+	# Предвычисление токенов для всех батчей
+	all_batches_tokens = []
+	for i, batch_texts in enumerate(processed_data):
+		future = tokenizer_executor.submit(async_tokenize_batch, batch_texts, i)
+		all_batches_tokens.append(future)
+	# Ждём завершения токенизации
+	all_batches_tokens = [future.result() for future in all_batches_tokens]
+
 	# ========== КАСТОМНЫЙ ЦИКЛ ОБУЧЕНИЯ ==========
 	info(f"Старт обучения на {test_epochs} эпох...")
 	global_step = 0
@@ -543,7 +597,7 @@ def train(test_mode=False, test_sample_size=100):
 							param_norm = p.grad.data.norm(2)
 							grad_norm += param_norm.item() ** 2
 					grad_norm = grad_norm ** 0.5
-					writer.add_scalar("train/grad_norm", grad_norm, global_step)
+					#writer.add_scalar("train/grad_norm", grad_norm, global_step)
 
 					# Если градиенты взрываются (>10) - предупреждение
 					if grad_norm > 10.0:
